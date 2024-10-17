@@ -11,6 +11,8 @@ Automatically generate Drizzle schema from Prisma schema
 generator drizzle {
   provider = "drizzle-prisma-generator"
   output = "./src/schema.ts"
+  indexFileTemplate  = "{{imports}}\n\nexport interface Database {\n{{content}}\n}"
+  indexModelTemplate = "\t{{dbName}}: typeof {{name}}"
 }
 ```
 

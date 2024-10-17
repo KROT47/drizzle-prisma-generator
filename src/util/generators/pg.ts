@@ -390,17 +390,26 @@ function getUniqueIndexAttributeName(args: AttributeArgument[]) {
 }
 
 export const generatePgSchema = (options: GeneratorOptions) => {
+  const schemaPath = options.generator.output?.value as string;
   const importsPath =
     'imports' in options.generator.config
       ? [options.generator.config['imports']].flat()[0]
       : undefined;
   if (importsPath) {
-    const schemaPath = options.generator.output?.value as string;
-
     const schemaDirPath = path.dirname(schemaPath);
-
     typeImportsPath = path.relative(schemaDirPath, importsPath);
   }
+
+  const indexFileTemplate =
+    'indexFileTemplate' in options.generator.config
+      ? [options.generator.config['indexFileTemplate']].flat()[0]
+      : undefined;
+
+  const indexModelTemplate =
+    'indexModelTemplate' in options.generator.config
+      ? [options.generator.config['indexModelTemplate']].flat()[0]
+      : undefined;
+
   const { datamodel } = options.dmmf;
   const { models, enums } = datamodel;
   const modelsIndexes =
@@ -676,5 +685,36 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     .filter((e) => e !== undefined)
     .join('\n\n');
 
-  return output;
+  let indexOutput: string | undefined;
+
+  function interpolate(
+    template: string,
+    data: Record<string, string>,
+    regExp: RegExp = /\{\{([^}]+)\}\}/gm
+  ) {
+    return template.replace(regExp, (_, p1) => data[p1] ?? '');
+  }
+
+  if (indexFileTemplate && indexModelTemplate) {
+    const schemaFileName = path.basename(schemaPath).split('.')[0];
+    const imports: string[] = [];
+    const content = models
+      .map((model) => {
+        imports.push(model.name);
+        return interpolate(
+          indexModelTemplate,
+          model as unknown as Record<string, string>
+        );
+      })
+      .join('\n');
+
+    indexOutput = interpolate(indexFileTemplate, {
+      content,
+      imports: `import {\n\t${imports.join(
+        ',\n\t'
+      )}\n} from './${schemaFileName}'`,
+    });
+  }
+
+  return [output, indexOutput] as [string, string | undefined];
 };

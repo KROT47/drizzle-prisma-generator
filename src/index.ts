@@ -22,11 +22,12 @@ export const generator = generatorHandler({
     const dbType = options.datasources[0]?.provider;
 
     let output: string;
+    let indexOutput: string | undefined;
 
     switch (dbType) {
       case 'postgres':
       case 'postgresql': {
-        output = generatePgSchema(options);
+        [output, indexOutput] = generatePgSchema(options);
 
         break;
       }
@@ -66,6 +67,15 @@ export const generator = generatorHandler({
       : path.join(folderPath, '/schema.ts');
 
     recursiveWrite(schemaPath, output);
+
+    if (indexOutput) {
+      const schemaDirPath = folderPath.endsWith('.ts')
+        ? path.dirname(folderPath)
+        : folderPath;
+      const indexPath = path.resolve(schemaDirPath, 'index.ts');
+
+      recursiveWrite(indexPath, indexOutput);
+    }
   },
 });
 
