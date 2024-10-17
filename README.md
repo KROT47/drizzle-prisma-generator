@@ -35,20 +35,33 @@ model Warehouse {
   /// @type(tsvector)
   /// @.generatedAlwaysAs(sql`prepare_search_field(name)`)
   fts String
+  deletedAt    DateTime? @db.Timestamptz(6)
+
+  /// @.where(sql`"deletedAt" IS NULL`)
+  @@unique([coordinates, name], name: "some_idx")
 }
 ```
 
 converts to:
 
 ```ts
-export const Warehouse = pgTable('warehouses', {
-  coordinates: geometry({ type: 'point', srid: 4326 })
-    .$type<SomeNamespace.SomeType>()
-    .notNull()
-    .default([123, 123]),
-  name: varchar({ length: 50 }).notNull(),
-  fts: tsvector()
-    .generatedAlwaysAs(sql`prepare_search_field(name)`)
-    .notNull(),
-});
+export const Warehouse = pgTable(
+  'warehouses',
+  {
+    coordinates: geometry({ type: 'point', srid: 4326 })
+      .$type<SomeNamespace.SomeType>()
+      .notNull()
+      .default([123, 123]),
+    name: varchar({ length: 50 }).notNull(),
+    fts: tsvector()
+      .generatedAlwaysAs(sql`prepare_search_field(name)`)
+      .notNull(),
+    deletedAt: timestamp({ mode: 'date', withTimezone: true, precision: 6 }),
+  },
+  (Warehouse) => ({
+    some_idx: uniqueIndex('some_idx')
+      .on(Warehouse.coordinates, Warehouse.name)
+      .where(sql`"deletedAt" IS NULL`),
+  })
+);
 ```

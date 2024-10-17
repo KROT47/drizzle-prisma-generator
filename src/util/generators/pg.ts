@@ -1,7 +1,16 @@
 import { s } from '@/util/escape';
 import { extractManyToManyModels } from '@/util/extract-many-to-many-models';
 import { UnReadonlyDeep } from '@/util/un-readonly-deep';
-import { Attribute, createPrismaSchemaBuilder } from '@mrleebo/prisma-ast';
+import {
+  Attribute,
+  AttributeArgument,
+  BlockAttribute,
+  Comment,
+  createPrismaSchemaBuilder,
+  KeyValue,
+  RelationArray,
+  Value,
+} from '@mrleebo/prisma-ast';
 import {
   type DMMF,
   GeneratorError,
@@ -52,7 +61,7 @@ function getFieldTypeAndConfigFromDocs(docs: DMMF.Field['documentation']) {
 
 const modsRegExp = /@(\.[^(]+\(.*\))/g;
 
-function getModsFromDocs(docs: DMMF.Field['documentation']) {
+function getModsFromDocs(docs: string) {
   const mods: string[] = [];
   if (docs) {
     let result: RegExpExecArray | null;
@@ -335,6 +344,51 @@ type Index = {
   }[];
 };
 
+type AttributeArgumentCheckFn = (val: KeyValue | RelationArray) => boolean;
+
+function getValue(
+  arg: KeyValue | RelationArray | Value,
+  check: AttributeArgumentCheckFn | undefined
+): Value | undefined {
+  if (typeof arg !== 'object') return arg;
+  if ('type' in arg) {
+    if (arg.type === 'keyValue')
+      return !check || check(arg) ? getValue(arg.value, undefined) : undefined;
+    if (arg.type === 'array')
+      return !check || check(arg) ? getValue(arg.args, undefined) : undefined;
+    if (arg.type === 'function') return undefined;
+  }
+  return arg;
+}
+
+function getUniqueIndexAttributeValue(
+  args: AttributeArgument[],
+  check: AttributeArgumentCheckFn
+) {
+  let fields: string[] | undefined;
+  let i = 0;
+  while (!fields) {
+    const arg = args[i++];
+    if (!arg) break;
+    fields = getValue(arg.value, check) as string[] | undefined;
+  }
+  return fields;
+}
+
+function getUniqueIndexAttributeFileds(args: AttributeArgument[]) {
+  return getUniqueIndexAttributeValue(
+    args,
+    (val) => !('key' in val) || val.key === 'fields'
+  );
+}
+
+function getUniqueIndexAttributeName(args: AttributeArgument[]) {
+  return getUniqueIndexAttributeValue(
+    args,
+    (val) => 'key' in val && val.key === 'name'
+  );
+}
+
 export const generatePgSchema = (options: GeneratorOptions) => {
   const importsPath =
     'imports' in options.generator.config
@@ -492,19 +546,40 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     if (schemaTable.uniqueIndexes.length) {
       pgImports.add('uniqueIndex');
 
-      const uniques = schemaTable.uniqueIndexes.map((idx) => {
+      const uniqueIndexes: (BlockAttribute & { comments: Comment[] })[] = [];
+      let prevComments: Comment[] = [];
+      modelAst.properties.forEach((prop) => {
+        if (prop.type === 'comment') {
+          prevComments.push(prop);
+          return;
+        }
+        if (prop.type === 'attribute' && prop.name === 'unique') {
+          uniqueIndexes.push({
+            ...prop,
+            comments: prevComments ?? [],
+          });
+        }
+        prevComments = [];
+      });
+
+      const uniques = uniqueIndexes.map(({ name, args, comments }) => {
+        const fields = getUniqueIndexAttributeFileds(args);
+
+        if (!fields || !fields.length) throw Error('No fields on unique index');
+
+        const _idxName = getUniqueIndexAttributeName(args) as unknown as string;
+
         const idxName = s(
-          idx.name ?? `${schemaTable.name}_${idx.fields.join('_')}_key`
+          _idxName ?? `${schemaTable.name}_${fields.join('_')}_key`
         );
-        // _key comes from Prisma, if their AI is to be trusted
+
+        const mods = comments.map(({ text }) => getModsFromDocs(text)).flat();
 
         return `\t'${
-          idx.name
-            ? idxName
-            : `${idxName.slice(0, idxName.length - 4)}_unique_idx`
-        }': uniqueIndex('${idxName}')\n\t\t.on(${idx.fields
+          name ? idxName : `${idxName.slice(0, idxName.length - 4)}_unique_idx`
+        }': uniqueIndex('${idxName}')\n\t\t.on(${fields
           .map((f) => `${schemaTable.name}.${f}`)
-          .join(', ')})`;
+          .join(', ')})${mods ? mods.join('') : ''}`;
       });
 
       indexes.push(...uniques);
