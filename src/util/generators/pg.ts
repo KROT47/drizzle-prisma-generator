@@ -1,6 +1,7 @@
 import { s } from '@/util/escape';
 import { extractManyToManyModels } from '@/util/extract-many-to-many-models';
 import { UnReadonlyDeep } from '@/util/un-readonly-deep';
+import { Attribute, createPrismaSchemaBuilder } from '@mrleebo/prisma-ast';
 import {
   type DMMF,
   GeneratorError,
@@ -20,15 +21,13 @@ function registerTsvectorFn() {
   );
 }
 
-type Field = DMMF.Field & { with?: string; mods?: Record<string, string> };
-
 let typeImportsPath: string | undefined;
 const pgImports = new Set<string>();
 const drizzleImports = new Set<string>();
 const constants = new Map<string, string>();
 pgImports.add('pgTable');
 
-function getTSTypeModStrFromDocs(docs: Field['documentation']) {
+function getTSTypeModStrFromDocs(docs: DMMF.Field['documentation']) {
   if (docs) {
     const match = docs.match(/@tsType\((.*)\)/);
     if (match) {
@@ -38,19 +37,22 @@ function getTSTypeModStrFromDocs(docs: Field['documentation']) {
   return '';
 }
 
-function getFieldTypeFromDocs(docs: Field['documentation']) {
+function getFieldTypeAndConfigFromDocs(docs: DMMF.Field['documentation']) {
   if (docs) {
-    const match = docs.match(/@type\((.*)\)/);
-    if (match) {
-      return match[1];
+    const match = docs.match(/@type\((.*?)(,\s*(.*))?\)/);
+    if (match && match[1]) {
+      return {
+        type: match[1],
+        config: match[3],
+      };
     }
   }
-  return '';
+  return undefined;
 }
 
 const modsRegExp = /@(\.[^(]+\(.*\))/g;
 
-function getModsFromDocs(docs: Field['documentation']) {
+function getModsFromDocs(docs: DMMF.Field['documentation']) {
   const mods: string[] = [];
   if (docs) {
     let result: RegExpExecArray | null;
@@ -66,24 +68,96 @@ function getModsFromDocs(docs: Field['documentation']) {
   return mods;
 }
 
+const dbSpecialTypes = {
+  Uuid: {
+    type: 'uuid',
+    getConfig(attribute: Attribute) {},
+  },
+  SmallInt: {
+    type: 'smallint',
+    getConfig(attribute: Attribute) {},
+  },
+  Real: {
+    type: 'real',
+    getConfig(attribute: Attribute) {},
+  },
+  Timestamptz: {
+    type: 'timestamp',
+    getConfig(attribute: Attribute) {
+      const config = {
+        mode: 'date',
+        withTimezone: true,
+        precision: 6,
+      };
+      const precision = attribute.args?.find(
+        ({ type }) => type === 'attributeArgument'
+      )?.value;
+      if (precision) {
+        config.precision = Number(precision);
+      }
+      return config;
+    },
+  },
+  VarChar: {
+    type: 'varchar',
+    getConfig(attribute: Attribute) {
+      const length = attribute.args?.find(
+        ({ type }) => type === 'attributeArgument'
+      )?.value;
+      if (!length) return;
+      return {
+        length: Number(length),
+      };
+    },
+  },
+};
+function getDbSpecialTypeAndConfigStr(attributes: Attribute[]) {
+  for (const [key, value] of Object.entries(dbSpecialTypes)) {
+    const attr = attributes.find(
+      ({ name, group }) => group === 'db' && name === key
+    );
+    if (!attr) continue;
+
+    const config = value.getConfig?.(attr);
+    return {
+      type: value.type,
+      config: config ? JSON.stringify(config) : undefined,
+    };
+  }
+  return undefined;
+}
+
 const prismaToDrizzleType = (
   type: string,
   _defVal?: string | unknown[],
-  docs?: Field['documentation']
+  docs?: DMMF.Field['documentation']
 ) => {
-  const defVal = Array.isArray(_defVal)
-    ? _defVal.map((x) => JSON.stringify(x)).join(', ')
-    : _defVal;
+  const defVal =
+    (Array.isArray(_defVal)
+      ? _defVal.map((x) => JSON.stringify(x)).join(', ')
+      : _defVal) ?? '';
   switch (type.toLowerCase()) {
+    case 'real':
+      pgImports.add('real');
+      return `real()`;
+    case 'smallint':
+      pgImports.add('smallint');
+      return `smallint()`;
+    case 'varchar':
+      pgImports.add('varchar');
+      return `varchar(${defVal})`;
+    case 'uuid':
+      pgImports.add('uuid');
+      return `uuid()`;
     case 'tsvector':
       registerTsvectorFn();
-      return `tsvector(${defVal ?? ''})`;
+      return `tsvector(${defVal})`;
     case 'geometry':
       pgImports.add('geometry');
       return `geometry(${defVal})`;
     case 'bigint':
       pgImports.add('bigint');
-      return `bigint({ mode: 'bigint' })`;
+      return `bigint({ mode: 'number' })`;
     case 'boolean':
       pgImports.add('boolean');
       return `boolean()`;
@@ -95,7 +169,7 @@ const prismaToDrizzleType = (
     case 'datetime':
     case 'timestamp':
       pgImports.add('timestamp');
-      return `timestamp()`;
+      return `timestamp(${defVal})`;
     case 'decimal':
       pgImports.add('decimal');
       return `decimal({ precision: 65, scale: 30 })`;
@@ -125,21 +199,13 @@ const prismaToDrizzleType = (
   }
 };
 
-const addColumnModifiers = (field: Field, column: string) => {
+const addColumnModifiers = (field: DMMF.Field, column: string) => {
   if (field.documentation) {
     const mods = getModsFromDocs(field.documentation);
     mods.forEach((mod) => {
       column = column + mod;
     });
   }
-  if (field.mods) {
-    column =
-      column +
-      Object.entries(field.mods)
-        .map(([key, value]) => `.${key}(${value})`)
-        .join('');
-  }
-  if (field.with) column = column + field.with;
   if (field.isList) column = column + `.array()`;
   if (field.isRequired) column = column + `.notNull()`;
   if (field.isId) column = column + `.primaryKey()`;
@@ -209,15 +275,13 @@ const addColumnModifiers = (field: Field, column: string) => {
   return column;
 };
 
-const prismaToDrizzleColumn = (_field: Field): string | undefined => {
+const prismaToDrizzleColumn = (
+  _field: DMMF.Field,
+  attributes?: Attribute[]
+): string | undefined => {
   const field = { ..._field };
   const colDbName = s(field.dbName ?? field.name);
   let column = `\t${field.name}: `;
-
-  // if (field.name === 'webId') {
-  //   // eslint-disable-next-line
-  //   console.log('>>>214', field);
-  // }
 
   if (field.kind === 'enum') {
     column = column + `${field.type}('${colDbName}')`;
@@ -225,31 +289,22 @@ const prismaToDrizzleColumn = (_field: Field): string | undefined => {
     let defVal;
     let type = field.type;
     const { default: defaultVal } = field;
-    let typeFromDocs = getFieldTypeFromDocs(field.documentation);
-    if (typeFromDocs) {
-      type = typeFromDocs;
-    } else if (typeof defaultVal === 'object' && 'name' in defaultVal) {
-      if (
-        type === 'Bytes' &&
-        defaultVal.name === 'dbgenerated' &&
-        typeof defaultVal.args[0] === 'string'
-      ) {
-        try {
-          const filedConfig = eval(`(${defaultVal.args[0]})`);
-          if (typeof filedConfig !== 'object') {
-            throw Error(`Invalid field config`);
-          }
-          type = filedConfig.type;
-          defVal = filedConfig.args;
-          field.mods = filedConfig.mods;
-          field.with = filedConfig.with;
-          field.default = filedConfig.default;
-        } catch (e) {
-          throw Error(`Error in ${field.name}: ${(e as Error).message}`);
-        }
-      } else {
-        defVal = defaultVal.name;
+    let typeAndConfigFromDocs = getFieldTypeAndConfigFromDocs(
+      field.documentation
+    );
+    if (typeAndConfigFromDocs) {
+      type = typeAndConfigFromDocs.type;
+      defVal = typeAndConfigFromDocs.config;
+    } else if (attributes) {
+      const typeAndConfig = getDbSpecialTypeAndConfigStr(attributes);
+      if (typeAndConfig) {
+        type = typeAndConfig.type;
+        defVal = typeAndConfig.config;
       }
+    }
+
+    if (!defVal && typeof defaultVal === 'object' && 'name' in defaultVal) {
+      defVal = defaultVal.name;
     }
 
     const drizzleType = prismaToDrizzleType(type, defVal, field.documentation);
@@ -276,9 +331,6 @@ type Index = {
 };
 
 export const generatePgSchema = (options: GeneratorOptions) => {
-  // eslint-disable-next-line
-  console.log('>>>275', options.dmmf);
-
   const importsPath =
     'imports' in options.generator.config
       ? [options.generator.config['imports']].flat()[0]
@@ -326,12 +378,35 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const tables: string[] = [];
   const rqb: string[] = [];
 
+  const prismaSchemaAstBuilder = createPrismaSchemaBuilder(options.datamodel);
+
   for (const schemaTable of modelsWithImplicit) {
+    const modelAst = prismaSchemaAstBuilder.findByType('model', {
+      name: schemaTable.name,
+    });
+    if (!modelAst) {
+      throw new Error(`Model ${schemaTable.name} not found in schema`);
+    }
+
     const tableDbName = s(schemaTable.dbName ?? schemaTable.name);
 
     const columnFields = Object.fromEntries(
       schemaTable.fields
-        .map((e) => [e.name, prismaToDrizzleColumn(e)])
+        .map((field) => {
+          const fieldAst = prismaSchemaAstBuilder.findByType('field', {
+            name: field.name,
+            within: modelAst.properties,
+          });
+
+          if (!fieldAst) {
+            throw new Error(`Model ${modelAst.name} not found in schema`);
+          }
+
+          return [
+            field.name,
+            prismaToDrizzleColumn(field, fieldAst.attributes),
+          ];
+        })
         .filter((e) => e[1] !== undefined)
     );
 

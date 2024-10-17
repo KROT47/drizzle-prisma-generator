@@ -22,25 +22,19 @@ generator drizzle {
 - Import schema from specified output file\folder
 - Congratulations, now you can use Drizzle ORM with generated schemas!
 
-## HACK to use unsupported prisma types (improved for pg only)
+## Using any types (improved for pg only)
 
-Define type `Bytes` with dbgenerated:
-
-- type (string) - drizzle type to use
-- args (array) - arguments to pass to type generator
-- default (expected type) - default value
-
-Or use documentation with `@type`, `@tsType` and `@.<anyDrizzleFieldMethod>(...)`
+Use documentation with `@type`, `@tsType` and `@.<anyDrizzleFieldMethod>(...)`
 
 ```prisma
 model Warehouse {
-  coordinates Bytes @default(dbgenerated("{ type: 'geometry', args: [{ type: 'point', srid: 4326 }], default: [123, 123] }"))
-  name String
-  fts1 Bytes  @default(dbgenerated("{ type: 'text', with: '.generatedAlwaysAs(sql`prepare_search_field(name)`)' }"))
+  /// @type(geometry, { type: 'point', srid: 4326 })
   /// @tsType(SomeNamespace.SomeType)
+  coordinates Json @default([123, 123])
+  name String @db.VarChar(50)
   /// @type(tsvector)
   /// @.generatedAlwaysAs(sql`prepare_search_field(name)`)
-  fts2 String
+  fts String
 }
 ```
 
@@ -49,14 +43,11 @@ converts to:
 ```ts
 export const Warehouse = pgTable('warehouses', {
   coordinates: geometry({ type: 'point', srid: 4326 })
+    .$type<SomeNamespace.SomeType>()
     .notNull()
     .default([123, 123]),
-  name: text().notNull(),
-  fts1: text()
-    .generatedAlwaysAs(sql`prepare_search_field(name)`)
-    .notNull(),
-  fts2: tsvector()
-    .$type<SomeNamespace.SomeType>()
+  name: varchar({ length: 50 }).notNull(),
+  fts: tsvector()
     .generatedAlwaysAs(sql`prepare_search_field(name)`)
     .notNull(),
 });
