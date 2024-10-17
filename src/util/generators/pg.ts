@@ -6,18 +6,78 @@ import {
   GeneratorError,
   type GeneratorOptions,
 } from '@prisma/generator-helper';
+import path from 'path';
 
-type Field = DMMF.Field & { with?: string };
+function registerTsvectorFn() {
+  pgImports.add('customType');
+  constants.set(
+    'tsvector',
+    `const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});`
+  );
+}
 
+type Field = DMMF.Field & { with?: string; mods?: Record<string, string> };
+
+let typeImportsPath: string | undefined;
 const pgImports = new Set<string>();
 const drizzleImports = new Set<string>();
+const constants = new Map<string, string>();
 pgImports.add('pgTable');
 
-const prismaToDrizzleType = (type: string, _defVal?: string | unknown[]) => {
+function getTSTypeModStrFromDocs(docs: Field['documentation']) {
+  if (docs) {
+    const match = docs.match(/@tsType\((.*)\)/);
+    if (match) {
+      return `.$type<${match[1]}>()`;
+    }
+  }
+  return '';
+}
+
+function getFieldTypeFromDocs(docs: Field['documentation']) {
+  if (docs) {
+    const match = docs.match(/@type\((.*)\)/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return '';
+}
+
+const modsRegExp = /@(\.[^(]+\(.*\))/g;
+
+function getModsFromDocs(docs: Field['documentation']) {
+  const mods: string[] = [];
+  if (docs) {
+    let result: RegExpExecArray | null;
+    while ((result = modsRegExp.exec(docs)) !== null) {
+      if (!result[1]) continue;
+      mods.push(result[1]);
+    }
+  }
+  if (mods.length) {
+    // maybe there are sql in mods
+    drizzleImports.add('sql');
+  }
+  return mods;
+}
+
+const prismaToDrizzleType = (
+  type: string,
+  _defVal?: string | unknown[],
+  docs?: Field['documentation']
+) => {
   const defVal = Array.isArray(_defVal)
     ? _defVal.map((x) => JSON.stringify(x)).join(', ')
     : _defVal;
   switch (type.toLowerCase()) {
+    case 'tsvector':
+      registerTsvectorFn();
+      return `tsvector(${defVal ?? ''})`;
     case 'geometry':
       pgImports.add('geometry');
       return `geometry(${defVal})`;
@@ -33,18 +93,22 @@ const prismaToDrizzleType = (type: string, _defVal?: string | unknown[]) => {
         "Drizzle ORM doesn't support binary data type for PostgreSQL"
       );
     case 'datetime':
+    case 'timestamp':
       pgImports.add('timestamp');
       return `timestamp()`;
     case 'decimal':
       pgImports.add('decimal');
       return `decimal({ precision: 65, scale: 30 })`;
     case 'float':
+    case 'doublePrecision':
       pgImports.add('doublePrecision');
       return `doublePrecision()`;
     case 'json':
+    case 'jsonb':
       pgImports.add('jsonb');
-      return `jsonb()`;
+      return `jsonb()${docs ? getTSTypeModStrFromDocs(docs) : ''}`;
     case 'int':
+    case 'integer':
       if (defVal === 'autoincrement') {
         pgImports.add('serial');
         return `serial()`;
@@ -53,6 +117,7 @@ const prismaToDrizzleType = (type: string, _defVal?: string | unknown[]) => {
       pgImports.add('integer');
       return `integer()`;
     case 'string':
+    case 'text':
       pgImports.add('text');
       return `text()`;
     default:
@@ -61,6 +126,20 @@ const prismaToDrizzleType = (type: string, _defVal?: string | unknown[]) => {
 };
 
 const addColumnModifiers = (field: Field, column: string) => {
+  if (field.documentation) {
+    const mods = getModsFromDocs(field.documentation);
+    mods.forEach((mod) => {
+      column = column + mod;
+    });
+  }
+  if (field.mods) {
+    column =
+      column +
+      Object.entries(field.mods)
+        .map(([key, value]) => `.${key}(${value})`)
+        .join('');
+  }
+  if (field.with) column = column + field.with;
   if (field.isList) column = column + `.array()`;
   if (field.isRequired) column = column + `.notNull()`;
   if (field.isId) column = column + `.primaryKey()`;
@@ -135,18 +214,23 @@ const prismaToDrizzleColumn = (_field: Field): string | undefined => {
   const colDbName = s(field.dbName ?? field.name);
   let column = `\t${field.name}: `;
 
+  // if (field.name === 'webId') {
+  //   // eslint-disable-next-line
+  //   console.log('>>>214', field);
+  // }
+
   if (field.kind === 'enum') {
     column = column + `${field.type}('${colDbName}')`;
   } else {
     let defVal;
     let type = field.type;
     const { default: defaultVal } = field;
-    if (
-      type === 'Bytes' &&
-      typeof defaultVal === 'object' &&
-      'name' in defaultVal
-    ) {
+    let typeFromDocs = getFieldTypeFromDocs(field.documentation);
+    if (typeFromDocs) {
+      type = typeFromDocs;
+    } else if (typeof defaultVal === 'object' && 'name' in defaultVal) {
       if (
+        type === 'Bytes' &&
         defaultVal.name === 'dbgenerated' &&
         typeof defaultVal.args[0] === 'string'
       ) {
@@ -157,18 +241,18 @@ const prismaToDrizzleColumn = (_field: Field): string | undefined => {
           }
           type = filedConfig.type;
           defVal = filedConfig.args;
+          field.mods = filedConfig.mods;
+          field.with = filedConfig.with;
           field.default = filedConfig.default;
         } catch (e) {
-          throw Error(
-            `Error in ${colDbName}.${field.name}: ${(e as Error).message}`
-          );
+          throw Error(`Error in ${field.name}: ${(e as Error).message}`);
         }
       } else {
         defVal = defaultVal.name;
       }
     }
 
-    const drizzleType = prismaToDrizzleType(type, defVal);
+    const drizzleType = prismaToDrizzleType(type, defVal, field.documentation);
     if (!drizzleType) return undefined;
 
     column = column + drizzleType;
@@ -179,8 +263,38 @@ const prismaToDrizzleColumn = (_field: Field): string | undefined => {
   return column;
 };
 
+type Index = {
+  model: string;
+  type: string;
+  isDefinedOnField: string;
+  dbName: string;
+  algorithm: string;
+  fields: {
+    name: string;
+    operatorClass: string;
+  }[];
+};
+
 export const generatePgSchema = (options: GeneratorOptions) => {
-  const { models, enums } = options.dmmf.datamodel;
+  // eslint-disable-next-line
+  console.log('>>>275', options.dmmf);
+
+  const importsPath =
+    'imports' in options.generator.config
+      ? [options.generator.config['imports']].flat()[0]
+      : undefined;
+  if (importsPath) {
+    const schemaPath = options.generator.output?.value as string;
+
+    const schemaDirPath = path.dirname(schemaPath);
+
+    typeImportsPath = path.relative(schemaDirPath, importsPath);
+  }
+  const { datamodel } = options.dmmf;
+  const { models, enums } = datamodel;
+  const modelsIndexes =
+    'indexes' in datamodel && (datamodel.indexes as Index[]);
+
   const clonedModels = JSON.parse(JSON.stringify(models)) as UnReadonlyDeep<
     DMMF.Model[]
   >;
@@ -221,7 +335,27 @@ export const generatePgSchema = (options: GeneratorOptions) => {
         .filter((e) => e[1] !== undefined)
     );
 
-    const indexes: string[] = [];
+    const indexes: string[] = (modelsIndexes || [])
+      .filter(
+        ({ model, type }) => model === schemaTable.name && type === 'normal'
+      )
+      .map(({ dbName, algorithm, fields }) => {
+        pgImports.add('index');
+        const indexName =
+          dbName ??
+          (fields[0]?.name
+            ? `${tableDbName}_${fields[0].name}_idx`
+            : undefined);
+        if (!indexName) return '';
+        drizzleImports.add('sql');
+        return `\t${indexName}: index('${indexName}')${fields
+          .map(
+            ({ name, operatorClass }) =>
+              `.using('${algorithm.toLowerCase()}', 
+            sql\`"${name}"${operatorClass ? ` ${operatorClass}` : ''}\`)`
+          )
+          .join('')}`;
+      });
 
     const relFields = schemaTable.fields.filter(
       (field) => field.relationToFields && field.relationFromFields
@@ -370,7 +504,20 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     .join('\n');
   if (!importsStr.length) importsStr = undefined;
 
-  const output = [importsStr, ...pgEnums, ...tables, ...rqb]
+  const typeImportsStr = typeImportsPath
+    ? `import * as imports from '${typeImportsPath}'`
+    : '';
+
+  const constantsStr = [...constants.values()].join('\n\n');
+
+  const output = [
+    importsStr,
+    typeImportsStr,
+    constantsStr,
+    ...pgEnums,
+    ...tables,
+    ...rqb,
+  ]
     .filter((e) => e !== undefined)
     .join('\n\n');
 

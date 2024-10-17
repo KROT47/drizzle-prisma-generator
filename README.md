@@ -30,9 +30,17 @@ Define type `Bytes` with dbgenerated:
 - args (array) - arguments to pass to type generator
 - default (expected type) - default value
 
+Or use documentation with `@type`, `@tsType` and `@.<anyDrizzleFieldMethod>(...)`
+
 ```prisma
 model Warehouse {
   coordinates Bytes @default(dbgenerated("{ type: 'geometry', args: [{ type: 'point', srid: 4326 }], default: [123, 123] }"))
+  name String
+  fts1 Bytes  @default(dbgenerated("{ type: 'text', with: '.generatedAlwaysAs(sql`prepare_search_field(name)`)' }"))
+  /// @tsType(SomeNamespace.SomeType)
+  /// @type(tsvector)
+  /// @.generatedAlwaysAs(sql`prepare_search_field(name)`)
+  fts2 String
 }
 ```
 
@@ -43,5 +51,13 @@ export const Warehouse = pgTable('warehouses', {
   coordinates: geometry({ type: 'point', srid: 4326 })
     .notNull()
     .default([123, 123]),
+  name: text().notNull(),
+  fts1: text()
+    .generatedAlwaysAs(sql`prepare_search_field(name)`)
+    .notNull(),
+  fts2: tsvector()
+    .$type<SomeNamespace.SomeType>()
+    .generatedAlwaysAs(sql`prepare_search_field(name)`)
+    .notNull(),
 });
 ```
