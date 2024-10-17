@@ -1,55 +1,53 @@
 {
-	"name": "drizzle-prisma-generator",
-	"author": "Drizzle Team",
-	"version": "0.1.7",
-	"description": "Generate Drizzle schema from Prisma schema",
-	"scripts": {
-		"run": "pnpm run build && cd ../prisma-testbench && npx prisma generate dev && code ./src/db/schema.ts",
-		"build": "pnpm tsx scripts/build.ts",
-		"b": "pnpm build",
-		"pack": "(cd dist && npm pack --pack-destination ..) && rm -f package.tgz && mv *.tgz package.tgz",
-		"publish": "npm publish package.tgz",
-		"test": "vitest run",
-		"lint": "dprint check --list-different"
-	},
-	"license": "Apache-2.0",
-	"devDependencies": {
-		"@arethetypeswrong/cli": "^0.15.3",
-		"@types/node": "^20.12.7",
-		"dprint": "^0.45.1",
-		"prisma": "^5.12.1",
-		"tsup": "^8.0.2",
-		"tsx": "^4.7.2",
-		"typescript": "^5.4.5",
-		"zx": "^8.0.2"
-	},
-	"keywords": [
-		"drizzle",
-		"prisma",
-		"orm",
-		"pg",
-		"mysql",
-		"postgresql",
-		"postgres",
-		"sqlite",
-		"database",
-		"sql",
-		"typescript",
-		"ts",
-		"schema"
-	],
-	"bin": "./index.js",
-	"main": "./index.js",
-	"sideEffects": false,
-	"publishConfig": {
-		"provenance": true
-	},
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/drizzle-team/drizzle-prisma-generator.git"
-	},
-	"homepage": "https://github.com/drizzle-team/drizzle-prisma-generator",
-	"dependencies": {
-		"@prisma/generator-helper": "^5.14.0"
-	}
+  "name": "@metamorph/drizzle-prisma-generator",
+  "author": "Drizzle Team",
+  "version": "0.1.8",
+  "description": "Generate Drizzle schema from Prisma schema",
+  "scripts": {
+    "run": "pnpm run build && cd ../prisma-testbench && npx prisma generate dev && code ./src/db/schema.ts",
+    "build": "pnpm tsx scripts/build.ts",
+    "b": "pnpm build",
+    "pack_OLD": "(cd dist && npm pack --pack-destination ..) && rm -f package.tgz && mv *.tgz package.tgz",
+    "publish_OLD": "npm publish package.tgz",
+    "test": "vitest run",
+    "lint": "dprint check --list-different"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.15.3",
+    "@types/node": "^20.12.7",
+    "dprint": "^0.45.1",
+    "prisma": "^5.12.1",
+    "tsup": "^8.0.2",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5",
+    "zx": "^8.0.2"
+  },
+  "keywords": [
+    "drizzle",
+    "prisma",
+    "orm",
+    "pg",
+    "mysql",
+    "postgresql",
+    "postgres",
+    "sqlite",
+    "database",
+    "sql",
+    "typescript",
+    "ts",
+    "schema"
+  ],
+  "bin": "./index.js",
+  "main": "./index.js",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drizzle-team/drizzle-prisma-generator.git"
+  },
+  "homepage": "https://github.com/drizzle-team/drizzle-prisma-generator",
+  "dependencies": {
+    "@prisma/generator-helper": "^5.14.0"
+  },
+  "packageManager": "pnpm@9.6.0+sha512.38dc6fba8dba35b39340b9700112c2fe1e12f10b17134715a4aa98ccf7bb035e76fd981cf0bb384dfa98f8d6af5481c2bef2f4266a24bfa20c34eb7147ce0b5e"
 }

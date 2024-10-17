@@ -7,22 +7,26 @@ import {
   type GeneratorOptions,
 } from '@prisma/generator-helper';
 
+type Field = DMMF.Field & { with?: string };
+
 const pgImports = new Set<string>();
 const drizzleImports = new Set<string>();
 pgImports.add('pgTable');
 
-const prismaToDrizzleType = (
-  type: string,
-  colDbName: string,
-  defVal?: string
-) => {
+const prismaToDrizzleType = (type: string, _defVal?: string | unknown[]) => {
+  const defVal = Array.isArray(_defVal)
+    ? _defVal.map((x) => JSON.stringify(x)).join(', ')
+    : _defVal;
   switch (type.toLowerCase()) {
+    case 'geometry':
+      pgImports.add('geometry');
+      return `geometry(${defVal})`;
     case 'bigint':
       pgImports.add('bigint');
-      return `bigint('${colDbName}', { mode: 'bigint' })`;
+      return `bigint({ mode: 'bigint' })`;
     case 'boolean':
       pgImports.add('boolean');
-      return `boolean('${colDbName}')`;
+      return `boolean()`;
     case 'bytes':
       // Drizzle doesn't support it yet...
       throw new GeneratorError(
@@ -30,33 +34,33 @@ const prismaToDrizzleType = (
       );
     case 'datetime':
       pgImports.add('timestamp');
-      return `timestamp('${colDbName}', { precision: 3 })`;
+      return `timestamp()`;
     case 'decimal':
       pgImports.add('decimal');
-      return `decimal('${colDbName}', { precision: 65, scale: 30 })`;
+      return `decimal({ precision: 65, scale: 30 })`;
     case 'float':
       pgImports.add('doublePrecision');
-      return `doublePrecision('${colDbName}')`;
+      return `doublePrecision()`;
     case 'json':
       pgImports.add('jsonb');
-      return `jsonb('${colDbName}')`;
+      return `jsonb()`;
     case 'int':
       if (defVal === 'autoincrement') {
         pgImports.add('serial');
-        return `serial('${colDbName}')`;
+        return `serial()`;
       }
 
       pgImports.add('integer');
-      return `integer('${colDbName}')`;
+      return `integer()`;
     case 'string':
       pgImports.add('text');
-      return `text('${colDbName}')`;
+      return `text()`;
     default:
       return undefined;
   }
 };
 
-const addColumnModifiers = (field: DMMF.Field, column: string) => {
+const addColumnModifiers = (field: Field, column: string) => {
   if (field.isList) column = column + `.array()`;
   if (field.isRequired) column = column + `.notNull()`;
   if (field.isId) column = column + `.primaryKey()`;
@@ -126,19 +130,45 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
   return column;
 };
 
-const prismaToDrizzleColumn = (field: DMMF.Field): string | undefined => {
+const prismaToDrizzleColumn = (_field: Field): string | undefined => {
+  const field = { ..._field };
   const colDbName = s(field.dbName ?? field.name);
   let column = `\t${field.name}: `;
 
   if (field.kind === 'enum') {
     column = column + `${field.type}('${colDbName}')`;
   } else {
-    const defVal =
-      typeof field.default === 'object' && !Array.isArray(field.default)
-        ? (field.default as { name: string }).name
-        : undefined;
+    let defVal;
+    let type = field.type;
+    const { default: defaultVal } = field;
+    if (
+      type === 'Bytes' &&
+      typeof defaultVal === 'object' &&
+      'name' in defaultVal
+    ) {
+      if (
+        defaultVal.name === 'dbgenerated' &&
+        typeof defaultVal.args[0] === 'string'
+      ) {
+        try {
+          const filedConfig = eval(`(${defaultVal.args[0]})`);
+          if (typeof filedConfig !== 'object') {
+            throw Error(`Invalid field config`);
+          }
+          type = filedConfig.type;
+          defVal = filedConfig.args;
+          field.default = filedConfig.default;
+        } catch (e) {
+          throw Error(
+            `Error in ${colDbName}.${field.name}: ${(e as Error).message}`
+          );
+        }
+      } else {
+        defVal = defaultVal.name;
+      }
+    }
 
-    const drizzleType = prismaToDrizzleType(field.type, colDbName, defVal);
+    const drizzleType = prismaToDrizzleType(type, defVal);
     if (!drizzleType) return undefined;
 
     column = column + drizzleType;
