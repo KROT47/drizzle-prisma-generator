@@ -156,6 +156,11 @@ const prismaToDrizzleType = (
       pgImports.add('geometry');
       return `geometry(${defVal})`;
     case 'bigint':
+      if (defVal === 'autoincrement') {
+        pgImports.add('bigserial');
+        return `bigserial({ mode: 'number' })`;
+      }
+
       pgImports.add('bigint');
       return `bigint({ mode: 'number' })`;
     case 'boolean':
