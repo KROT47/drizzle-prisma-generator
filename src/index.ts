@@ -7,6 +7,7 @@ import {
   generateMySqlSchema,
   generatePgSchema,
   generateSQLiteSchema,
+  FileToGenerate,
 } from './util/generators';
 import { recursiveWrite } from './util/recursive-write';
 
@@ -22,12 +23,12 @@ export const generator = generatorHandler({
     const dbType = options.datasources[0]?.provider;
 
     let output: string;
-    let indexOutput: string | undefined;
+    let filesToGenerate: FileToGenerate[] | undefined;
 
     switch (dbType) {
       case 'postgres':
       case 'postgresql': {
-        [output, indexOutput] = generatePgSchema(options);
+        [output, filesToGenerate] = generatePgSchema(options);
 
         break;
       }
@@ -68,14 +69,10 @@ export const generator = generatorHandler({
 
     recursiveWrite(schemaPath, output);
 
-    if (indexOutput) {
-      const schemaDirPath = folderPath.endsWith('.ts')
-        ? path.dirname(folderPath)
-        : folderPath;
-      const indexPath = path.resolve(schemaDirPath, 'index.ts');
-
-      recursiveWrite(indexPath, indexOutput);
-    }
+    filesToGenerate?.forEach(({ file, content }) => {
+      const filePath = path.resolve(process.cwd(), file);
+      recursiveWrite(filePath, content);
+    });
   },
 });
 

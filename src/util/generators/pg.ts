@@ -7,6 +7,7 @@ import {
   BlockAttribute,
   Comment,
   createPrismaSchemaBuilder,
+  Field,
   KeyValue,
   RelationArray,
   Value,
@@ -17,6 +18,61 @@ import {
   type GeneratorOptions,
 } from '@prisma/generator-helper';
 import path from 'path';
+
+export type FileToGenerate = { file: string; content: string };
+
+function camelize(str: string) {
+  return str
+    .replace(/(?:^\w|[A-Z]|\b\w)/g, function (word, index) {
+      return index === 0 ? word.toLowerCase() : word.toUpperCase();
+    })
+    .replace(/\s+/g, '');
+}
+
+type InterpolateTransformer = (
+  key: string,
+  data: Record<string, string>,
+  option?: string
+) => string;
+const interpolateTransformers: Record<string, InterpolateTransformer> = {
+  camelCase(key) {
+    return camelize(key);
+  },
+  if(key, data, option) {
+    const match = option?.match(/if\(([^)]+)\)\?([^:]*):(.*)$/);
+    if (!match) return key;
+    const [_, condStr, thenStr, elseStr] = match;
+    if (typeof condStr === 'string' && condStr in data && data[condStr]) {
+      return `${key}${thenStr}`;
+    }
+    return `${key}${elseStr}`;
+  },
+};
+function interpolate(
+  template: string,
+  data: Record<string, string>,
+  regExp: RegExp = /\{\{([^}|]*)(\|(([a-zA-Z0-9_]+)[^}]*))?\}\}/gm
+) {
+  return template.replace(
+    regExp,
+    (_, p1, _p2, p3, p4: keyof typeof interpolateTransformers | undefined) => {
+      const transformer =
+        p4 && interpolateTransformers[p4]
+          ? interpolateTransformers[p4]
+          : (x: string) => x;
+      return transformer(data[p1] ?? '', data, p3);
+    }
+  );
+}
+
+function getRelativePathWithoutExtension(pathA: string, pathB: string) {
+  const schemaRelativePath = path.relative(path.dirname(pathA), pathB);
+  const parsedPath = path.parse(schemaRelativePath);
+  const filePathWithoutExtension = path.join(parsedPath.dir, parsedPath.name);
+  return `${
+    !filePathWithoutExtension.startsWith('.') ? './' : ''
+  }${filePathWithoutExtension}`;
+}
 
 function registerTsvectorFn() {
   pgImports.add('customType');
@@ -209,6 +265,9 @@ const prismaToDrizzleType = (
       pgImports.add('text');
       return `text()`;
     default:
+      if (type.startsWith('imports.')) {
+        return `${type}(${defVal})`;
+      }
       return undefined;
   }
 };
@@ -389,16 +448,43 @@ function getUniqueIndexAttributeName(args: AttributeArgument[]) {
   );
 }
 
+function getMaybeArrayFirstValue<T extends unknown>(
+  maybeArr: T | T[]
+): T | undefined {
+  return Array.isArray(maybeArr) ? maybeArr[0] : maybeArr;
+}
+
 export const generatePgSchema = (options: GeneratorOptions) => {
   const schemaPath = options.generator.output?.value as string;
   const importsPath =
     'imports' in options.generator.config
-      ? [options.generator.config['imports']].flat()[0]
+      ? getMaybeArrayFirstValue(options.generator.config['imports'])
       : undefined;
   if (importsPath) {
-    const schemaDirPath = path.dirname(schemaPath);
-    typeImportsPath = path.relative(schemaDirPath, importsPath);
+    typeImportsPath = getRelativePathWithoutExtension(schemaPath, importsPath);
   }
+
+  const config = options.generator.config;
+  const optionsKeys = Object.keys(config);
+  const fileKeysToGenerate = optionsKeys.filter((key) => key.match(/file\d/));
+  const fileConfigsToGenerate = fileKeysToGenerate.map((key) => {
+    const index = key.match(/file(\d+)/)?.[1];
+    if (!index) throw Error('File index not found');
+    return {
+      file: getMaybeArrayFirstValue(config[`file${index}`]),
+      template: getMaybeArrayFirstValue(config[`template${index}`]),
+      typeMapImports: getMaybeArrayFirstValue(
+        config[`template${index}_typeMapImports`]
+      ),
+      content: getMaybeArrayFirstValue(config[`template${index}_content`]),
+      importedTypesContent: getMaybeArrayFirstValue(
+        config[`template${index}_importedTypesContent`]
+      ),
+      importedTypesMap: getMaybeArrayFirstValue(
+        config[`template${index}_importedTypesMap`]
+      ),
+    };
+  });
 
   const indexFileTemplate =
     'indexFileTemplate' in options.generator.config
@@ -413,7 +499,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const { datamodel } = options.dmmf;
   const { models, enums } = datamodel;
   const modelsIndexes =
-    'indexes' in datamodel && (datamodel.indexes as Index[]);
+    'indexes' in datamodel && (datamodel.indexes as unknown as Index[]);
 
   const clonedModels = JSON.parse(JSON.stringify(models)) as UnReadonlyDeep<
     DMMF.Model[]
@@ -685,36 +771,100 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     .filter((e) => e !== undefined)
     .join('\n\n');
 
-  let indexOutput: string | undefined;
+  const filesToGenerate: FileToGenerate[] = [];
 
-  function interpolate(
-    template: string,
-    data: Record<string, string>,
-    regExp: RegExp = /\{\{([^}]+)\}\}/gm
-  ) {
-    return template.replace(regExp, (_, p1) => data[p1] ?? '');
-  }
+  // const importedFields = [
+  //   ...new Set(
+  //     models
+  //       .map(({ fields }) =>
+  //         fields.map(({ name, documentation }) => {
+  //           const specialType =
+  //             getFieldTypeAndConfigFromDocs(documentation)?.type;
+  //           return specialType?.startsWith('imports.') ? name : undefined;
+  //         })
+  //       )
+  //       .flat()
+  //   ),
+  // ].filter(Boolean) as string[];
 
-  if (indexFileTemplate && indexModelTemplate) {
-    const schemaFileName = path.basename(schemaPath).split('.')[0];
-    const imports: string[] = [];
-    const content = models
-      .map((model) => {
-        imports.push(model.name);
-        return interpolate(
-          indexModelTemplate,
-          model as unknown as Record<string, string>
-        );
-      })
-      .join('\n');
+  if (fileConfigsToGenerate.length) {
+    fileConfigsToGenerate.forEach((fileConfig) => {
+      const file = fileConfig.file;
+      const _template = fileConfig.template;
+      const _content = fileConfig.content;
 
-    indexOutput = interpolate(indexFileTemplate, {
-      content,
-      imports: `import {\n\t${imports.join(
-        ',\n\t'
-      )}\n} from './${schemaFileName}'`,
+      if (!file || !_template || !_content) return;
+
+      const schemaRelativePath = getRelativePathWithoutExtension(
+        file,
+        schemaPath
+      );
+
+      const imports: string[] = [];
+      const fieldTypeImports = new Set<string>();
+
+      const content = models
+        .map((model) => {
+          imports.push(model.name);
+          const localFieldTypesImports: Partial<DMMF.Field>[] = [];
+
+          model.fields.forEach((field) => {
+            const specialType = getFieldTypeAndConfigFromDocs(
+              field.documentation
+            )?.type;
+            if (specialType?.startsWith('imports.')) {
+              const fieldType = specialType.split('imports.')[1]!;
+              localFieldTypesImports.push({ ...field, type: fieldType });
+              fieldTypeImports.add(fieldType);
+            }
+          });
+
+          const _importedTypesMap = fileConfig.importedTypesMap;
+          const importedTypesMap = _importedTypesMap
+            ? localFieldTypesImports
+                .map((data) =>
+                  interpolate(_importedTypesMap, data as Record<string, string>)
+                )
+                .join('')
+            : '';
+
+          const _importedTypesContent = fileConfig.importedTypesContent;
+          const importedTypesContent =
+            _importedTypesContent && importedTypesMap
+              ? interpolate(_importedTypesContent, { importedTypesMap })
+              : '';
+
+          return interpolate(_content, {
+            importedTypesContent,
+            tableName: model.dbName ?? '',
+            modelName: model.name,
+          });
+        })
+        .join('\n');
+
+      const _typeMapImports = fileConfig.typeMapImports;
+      const typeMapImports = _typeMapImports
+        ? [...fieldTypeImports]
+            .map((fieldType) => interpolate(_typeMapImports, { fieldType }))
+            .join('')
+        : '';
+
+      const result =
+        '// generated by drizzle-prisma-generator\n' +
+        interpolate(_template, {
+          content,
+          typeMapImports,
+          imports: `import {\n  ${imports.join(
+            ',\n  '
+          )},\n} from '${schemaRelativePath}'`,
+        });
+
+      filesToGenerate.push({
+        file: file,
+        content: result,
+      });
     });
   }
 
-  return [output, indexOutput] as [string, string | undefined];
+  return [output, filesToGenerate] as [string, FileToGenerate[]];
 };
