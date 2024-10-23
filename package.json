@@ -1,14 +1,13 @@
 {
   "name": "@metamorph/drizzle-prisma-generator",
   "author": "Drizzle Team",
-  "version": "0.1.13",
+  "version": "0.1.15",
   "description": "Generate Drizzle schema from Prisma schema",
   "scripts": {
     "run": "pnpm run build && cd ../prisma-testbench && npx prisma generate dev && code ./src/db/schema.ts",
     "build": "pnpm tsx scripts/build.ts",
     "b": "pnpm build",
-    "pack_OLD": "(cd dist && npm pack --pack-destination ..) && rm -f package.tgz && mv *.tgz package.tgz",
-    "publish_OLD": "npm publish package.tgz",
+    "publish": "npm build && cd dist && npm publish --access=public",
     "test": "vitest run",
     "lint": "dprint check --list-different"
   },
