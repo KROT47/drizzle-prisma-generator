@@ -229,7 +229,7 @@ const addColumnModifiers = (
       column += mod;
     });
 
-    const tsTypeMod = getTSTypeModStrFromDocs(field.documentation);
+    const tsTypeMod = getTSTypeModStrFromDocs(field);
     column += tsTypeMod;
   }
 

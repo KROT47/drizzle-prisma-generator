@@ -197,11 +197,14 @@ export function getFieldForeignKeyField(
   return;
 }
 
-export function getTSTypeModStrFromDocs(docs: DMMF.Field['documentation']) {
-  if (docs) {
-    const match = docs.match(/@tsType\((.*)\)/);
+export function getTSTypeModStrFromDocs({
+  documentation,
+  isRequired,
+}: DMMF.Field) {
+  if (documentation) {
+    const match = documentation.match(/@tsType\((.*)\)/);
     if (match) {
-      return `.$type<${match[1]}>()`;
+      return `.$type<${match[1]}${isRequired ? '' : ' | null | undefined'}>()`;
     }
   }
   return '';
