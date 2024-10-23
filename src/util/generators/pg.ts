@@ -18,61 +18,24 @@ import {
   type GeneratorOptions,
 } from '@prisma/generator-helper';
 import path from 'path';
-
-export type FileToGenerate = { file: string; content: string };
-
-function camelize(str: string) {
-  return str
-    .replace(/(?:^\w|[A-Z]|\b\w)/g, function (word, index) {
-      return index === 0 ? word.toLowerCase() : word.toUpperCase();
-    })
-    .replace(/\s+/g, '');
-}
-
-type InterpolateTransformer = (
-  key: string,
-  data: Record<string, string>,
-  option?: string
-) => string;
-const interpolateTransformers: Record<string, InterpolateTransformer> = {
-  camelCase(key) {
-    return camelize(key);
-  },
-  if(key, data, option) {
-    const match = option?.match(/if\(([^)]+)\)\?([^:]*):(.*)$/);
-    if (!match) return key;
-    const [_, condStr, thenStr, elseStr] = match;
-    if (typeof condStr === 'string' && condStr in data && data[condStr]) {
-      return `${key}${thenStr}`;
-    }
-    return `${key}${elseStr}`;
-  },
-};
-function interpolate(
-  template: string,
-  data: Record<string, string>,
-  regExp: RegExp = /\{\{([^}|]*)(\|(([a-zA-Z0-9_]+)[^}]*))?\}\}/gm
-) {
-  return template.replace(
-    regExp,
-    (_, p1, _p2, p3, p4: keyof typeof interpolateTransformers | undefined) => {
-      const transformer =
-        p4 && interpolateTransformers[p4]
-          ? interpolateTransformers[p4]
-          : (x: string) => x;
-      return transformer(data[p1] ?? '', data, p3);
-    }
-  );
-}
-
-function getRelativePathWithoutExtension(pathA: string, pathB: string) {
-  const schemaRelativePath = path.relative(path.dirname(pathA), pathB);
-  const parsedPath = path.parse(schemaRelativePath);
-  const filePathWithoutExtension = path.join(parsedPath.dir, parsedPath.name);
-  return `${
-    !filePathWithoutExtension.startsWith('.') ? './' : ''
-  }${filePathWithoutExtension}`;
-}
+import {
+  FileToGenerate,
+  getAllTemplatesFromConfig,
+  getDeleteAction,
+  getFieldForeignKeyField,
+  getFieldTypeAndConfigFromDocs,
+  getMaybeArrayFirstValue,
+  getRelativePathWithoutExtension,
+  getTSTypeModStrFromDocs,
+  getUniqueIndexAttributeFileds,
+  getUniqueIndexAttributeName,
+  Index,
+  interpolate,
+  interpolateTemplates,
+  mapValues,
+  mapValuesFilterTruthy,
+  Templates,
+} from './utils';
 
 function registerTsvectorFn() {
   pgImports.add('customType');
@@ -91,29 +54,6 @@ const pgImports = new Set<string>();
 const drizzleImports = new Set<string>();
 const constants = new Map<string, string>();
 pgImports.add('pgTable');
-
-function getTSTypeModStrFromDocs(docs: DMMF.Field['documentation']) {
-  if (docs) {
-    const match = docs.match(/@tsType\((.*)\)/);
-    if (match) {
-      return `.$type<${match[1]}>()`;
-    }
-  }
-  return '';
-}
-
-function getFieldTypeAndConfigFromDocs(docs: DMMF.Field['documentation']) {
-  if (docs) {
-    const match = docs.match(/@type\((.*?)(,\s*(.*))?\)/);
-    if (match && match[1]) {
-      return {
-        type: match[1],
-        config: match[3],
-      };
-    }
-  }
-  return undefined;
-}
 
 const modsRegExp = /@(\.[^(]+\(.*\))/g;
 
@@ -250,7 +190,7 @@ const prismaToDrizzleType = (
     case 'json':
     case 'jsonb':
       pgImports.add('jsonb');
-      return `jsonb()${docs ? getTSTypeModStrFromDocs(docs) : ''}`;
+      return `jsonb()`;
     case 'int':
     case 'integer':
       if (defVal === 'autoincrement') {
@@ -272,17 +212,26 @@ const prismaToDrizzleType = (
   }
 };
 
-const addColumnModifiers = (field: DMMF.Field, column: string) => {
+const addColumnModifiers = (
+  field: DMMF.Field,
+  column: string,
+  fields: readonly DMMF.Field[],
+  attributes?: Attribute[]
+) => {
   if (field.documentation) {
     const mods = getModsFromDocs(field.documentation);
     mods.forEach((mod) => {
-      column = column + mod;
+      column += mod;
     });
+
+    const tsTypeMod = getTSTypeModStrFromDocs(field.documentation);
+    column += tsTypeMod;
   }
-  if (field.isList) column = column + `.array()`;
-  if (field.isRequired) column = column + `.notNull()`;
-  if (field.isId) column = column + `.primaryKey()`;
-  if (field.isUnique) column = column + `.unique()`;
+
+  if (field.isList) column += `.array()`;
+  if (field.isRequired) column += `.notNull()`;
+  if (field.isId) column += `.primaryKey()`;
+  if (field.isUnique) column += `.unique()`;
 
   if (field.default) {
     const defVal = field.default;
@@ -292,7 +241,7 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
       case 'string':
       case 'symbol':
       case 'boolean':
-        column = column + `.default(${JSON.stringify(defVal)})`;
+        column += `.default(${JSON.stringify(defVal)})`;
         break;
       case 'object':
         if (Array.isArray(defVal)) {
@@ -308,7 +257,7 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
         };
 
         if (value.name === 'now') {
-          column = column + `.defaultNow()`;
+          column += `.defaultNow()`;
           break;
         }
 
@@ -317,14 +266,14 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
         }
 
         if (value.name === 'dbgenerated') {
-          column = column + `.default(sql\`${s(value.args[0], '`')}\`)`;
+          column += `.default(sql\`${s(value.args[0], '`')}\`)`;
 
           drizzleImports.add('sql');
           break;
         }
 
         if (/^uuid\([0-9]*\)$/.test(value.name)) {
-          column = column + `.default(sql\`uuid()\`)`;
+          column += `.default(sql\`uuid()\`)`;
 
           drizzleImports.add('sql');
           break;
@@ -340,8 +289,21 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
         const sequel = `sql\`${s(stringified, '`')}\``;
 
         drizzleImports.add('sql');
-        column = column + `.default(${sequel})`;
+        column += `.default(${sequel})`;
         break;
+    }
+  }
+
+  if (attributes?.some(({ name }) => name === 'updatedAt')) {
+    column += '.defaultNow().$onUpdate(() => sql`now()`)';
+  }
+
+  const fkField = getFieldForeignKeyField(field, fields);
+  if (fkField) {
+    const { type, relationToFields } = fkField;
+    if (relationToFields) {
+      const deleteAction = getDeleteAction(fkField);
+      column += `.references((): AnyPgColumn => ${type}.${relationToFields[0]}, {onDelete: '${deleteAction}'})`;
     }
   }
 
@@ -349,15 +311,15 @@ const addColumnModifiers = (field: DMMF.Field, column: string) => {
 };
 
 const prismaToDrizzleColumn = (
-  _field: DMMF.Field,
+  field: DMMF.Field,
+  fields: readonly DMMF.Field[],
   attributes?: Attribute[]
 ): string | undefined => {
-  const field = { ..._field };
   const colDbName = s(field.dbName ?? field.name);
   let column = `\t${field.name}: `;
 
   if (field.kind === 'enum') {
-    column = column + `${field.type}('${colDbName}')`;
+    column += `${field.type}('${colDbName}')`;
   } else {
     let defVal;
     let type = field.type;
@@ -383,76 +345,13 @@ const prismaToDrizzleColumn = (
     const drizzleType = prismaToDrizzleType(type, defVal, field.documentation);
     if (!drizzleType) return undefined;
 
-    column = column + drizzleType;
+    column += drizzleType;
   }
 
-  column = addColumnModifiers(field, column);
+  column = addColumnModifiers(field, column, fields, attributes);
 
   return column;
 };
-
-type Index = {
-  model: string;
-  type: string;
-  isDefinedOnField: string;
-  dbName: string;
-  algorithm: string;
-  fields: {
-    name: string;
-    operatorClass: string;
-  }[];
-};
-
-type AttributeArgumentCheckFn = (val: KeyValue | RelationArray) => boolean;
-
-function getValue(
-  arg: KeyValue | RelationArray | Value,
-  check: AttributeArgumentCheckFn | undefined
-): Value | undefined {
-  if (typeof arg !== 'object') return arg;
-  if ('type' in arg) {
-    if (arg.type === 'keyValue')
-      return !check || check(arg) ? getValue(arg.value, undefined) : undefined;
-    if (arg.type === 'array')
-      return !check || check(arg) ? getValue(arg.args, undefined) : undefined;
-    if (arg.type === 'function') return undefined;
-  }
-  return arg;
-}
-
-function getUniqueIndexAttributeValue(
-  args: AttributeArgument[],
-  check: AttributeArgumentCheckFn
-) {
-  let fields: string[] | undefined;
-  let i = 0;
-  while (!fields) {
-    const arg = args[i++];
-    if (!arg) break;
-    fields = getValue(arg.value, check) as string[] | undefined;
-  }
-  return fields;
-}
-
-function getUniqueIndexAttributeFileds(args: AttributeArgument[]) {
-  return getUniqueIndexAttributeValue(
-    args,
-    (val) => !('key' in val) || val.key === 'fields'
-  );
-}
-
-function getUniqueIndexAttributeName(args: AttributeArgument[]) {
-  return getUniqueIndexAttributeValue(
-    args,
-    (val) => 'key' in val && val.key === 'name'
-  );
-}
-
-function getMaybeArrayFirstValue<T extends unknown>(
-  maybeArr: T | T[]
-): T | undefined {
-  return Array.isArray(maybeArr) ? maybeArr[0] : maybeArr;
-}
 
 export const generatePgSchema = (options: GeneratorOptions) => {
   const schemaPath = options.generator.output?.value as string;
@@ -473,28 +372,28 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     return {
       file: getMaybeArrayFirstValue(config[`file${index}`]),
       template: getMaybeArrayFirstValue(config[`template${index}`]),
-      typeMapImports: getMaybeArrayFirstValue(
-        config[`template${index}_typeMapImports`]
+      typeMapImports: getAllTemplatesFromConfig(
+        config,
+        `template${index}_typeMapImports`,
+        'typeMapImports'
       ),
-      content: getMaybeArrayFirstValue(config[`template${index}_content`]),
-      importedTypesContent: getMaybeArrayFirstValue(
-        config[`template${index}_importedTypesContent`]
+      content: getAllTemplatesFromConfig(
+        config,
+        `template${index}_content`,
+        'content'
       ),
-      importedTypesMap: getMaybeArrayFirstValue(
-        config[`template${index}_importedTypesMap`]
+      importedTypesContent: getAllTemplatesFromConfig(
+        config,
+        `template${index}_importedTypesContent`,
+        'importedTypesContent'
+      ),
+      importedTypesMap: getAllTemplatesFromConfig(
+        config,
+        `template${index}_importedTypesMap`,
+        'importedTypesMap'
       ),
     };
   });
-
-  const indexFileTemplate =
-    'indexFileTemplate' in options.generator.config
-      ? [options.generator.config['indexFileTemplate']].flat()[0]
-      : undefined;
-
-  const indexModelTemplate =
-    'indexModelTemplate' in options.generator.config
-      ? [options.generator.config['indexModelTemplate']].flat()[0]
-      : undefined;
 
   const { datamodel } = options.dmmf;
   const { models, enums } = datamodel;
@@ -558,7 +457,11 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
           return [
             field.name,
-            prismaToDrizzleColumn(field, fieldAst.attributes),
+            prismaToDrizzleColumn(
+              field,
+              schemaTable.fields,
+              fieldAst.attributes
+            ),
           ];
         })
         .filter((e) => e[1] !== undefined)
@@ -585,58 +488,6 @@ export const generatePgSchema = (options: GeneratorOptions) => {
           )
           .join('')}`;
       });
-
-    const relFields = schemaTable.fields.filter(
-      (field) => field.relationToFields && field.relationFromFields
-    );
-    const relations = relFields
-      .map<string | undefined>((field) => {
-        if (!field?.relationFromFields?.length) return undefined;
-
-        const fkeyName = s(
-          `${schemaTable.dbName ?? schemaTable.name}_${
-            field.dbName ?? field.name
-          }_fkey`
-        );
-        let deleteAction: string;
-        switch (field.relationOnDelete) {
-          case undefined:
-          case 'Cascade':
-            deleteAction = 'cascade';
-            break;
-          case 'SetNull':
-            deleteAction = 'set null';
-            break;
-          case 'SetDefault':
-            deleteAction = 'set default';
-            break;
-          case 'Restrict':
-            deleteAction = 'restrict';
-            break;
-          case 'NoAction':
-            deleteAction = 'no action';
-            break;
-          default:
-            throw new GeneratorError(
-              `Unknown delete action on relation ${fkeyName}: ${field.relationOnDelete}`
-            );
-        }
-
-        pgImports.add('foreignKey');
-
-        return `\t'${fkeyName}': foreignKey({\n\t\tname: '${fkeyName}',\n\t\tcolumns: [${field.relationFromFields
-          .map((rel) => `${schemaTable.name}.${rel}`)
-          .join(', ')}],\n\t\tforeignColumns: [${field
-          .relationToFields!.map((rel) => `${field.type}.${rel}`)
-          .join(', ')}]\n\t})${
-          deleteAction && deleteAction !== 'no action'
-            ? `\n\t\t.onDelete('${deleteAction}')`
-            : ''
-        }\n\t\t.onUpdate('cascade')`;
-      })
-      .filter((e) => e !== undefined) as string[];
-
-    indexes.push(...relations);
 
     if (schemaTable.uniqueIndexes.length) {
       pgImports.add('uniqueIndex');
@@ -705,13 +556,19 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
     tables.push(table);
 
+    const relFields = schemaTable.fields.filter(
+      (field) => field.relationToFields && field.relationFromFields
+    );
+
     if (!relFields.length) continue;
+    pgImports.add('AnyPgColumn');
     drizzleImports.add('relations');
 
     const relationArgs = new Set<string>();
     const rqbFields = relFields
       .map((field) => {
         relationArgs.add(field.relationFromFields?.length ? 'one' : 'many');
+
         const relName = s(field.relationName ?? '');
 
         return `\t${field.name}: ${
@@ -773,20 +630,6 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
   const filesToGenerate: FileToGenerate[] = [];
 
-  // const importedFields = [
-  //   ...new Set(
-  //     models
-  //       .map(({ fields }) =>
-  //         fields.map(({ name, documentation }) => {
-  //           const specialType =
-  //             getFieldTypeAndConfigFromDocs(documentation)?.type;
-  //           return specialType?.startsWith('imports.') ? name : undefined;
-  //         })
-  //       )
-  //       .flat()
-  //   ),
-  // ].filter(Boolean) as string[];
-
   if (fileConfigsToGenerate.length) {
     fileConfigsToGenerate.forEach((fileConfig) => {
       const file = fileConfig.file;
@@ -803,57 +646,71 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       const imports: string[] = [];
       const fieldTypeImports = new Set<string>();
 
-      const content = models
-        .map((model) => {
-          imports.push(model.name);
-          const localFieldTypesImports: Partial<DMMF.Field>[] = [];
+      const content: Templates = mapValues<string, string, Templates>(
+        _content,
+        (template) =>
+          models
+            .map((model) => {
+              imports.push(model.name);
+              const localFieldTypesImports: Partial<DMMF.Field>[] = [];
 
-          model.fields.forEach((field) => {
-            const specialType = getFieldTypeAndConfigFromDocs(
-              field.documentation
-            )?.type;
-            if (specialType?.startsWith('imports.')) {
-              const fieldType = specialType.split('imports.')[1]!;
-              localFieldTypesImports.push({ ...field, type: fieldType });
-              fieldTypeImports.add(fieldType);
-            }
-          });
+              model.fields.forEach((field) => {
+                const specialType = getFieldTypeAndConfigFromDocs(
+                  field.documentation
+                )?.type;
+                if (specialType?.startsWith('imports.')) {
+                  const fieldType = specialType.split('imports.')[1]!;
+                  localFieldTypesImports.push({ ...field, type: fieldType });
+                  fieldTypeImports.add(fieldType);
+                }
+              });
 
-          const _importedTypesMap = fileConfig.importedTypesMap;
-          const importedTypesMap = _importedTypesMap
-            ? localFieldTypesImports
-                .map((data) =>
-                  interpolate(_importedTypesMap, data as Record<string, string>)
-                )
-                .join('')
-            : '';
+              const _importedTypesMap = fileConfig.importedTypesMap;
+              const importedTypesMap = Object.keys(_importedTypesMap).length
+                ? mapValuesFilterTruthy<string, string, Templates>(
+                    _importedTypesMap,
+                    (template) =>
+                      localFieldTypesImports
+                        .map((data) =>
+                          interpolate(template, data as Record<string, string>)
+                        )
+                        .join('')
+                  )
+                : {};
 
-          const _importedTypesContent = fileConfig.importedTypesContent;
-          const importedTypesContent =
-            _importedTypesContent && importedTypesMap
-              ? interpolate(_importedTypesContent, { importedTypesMap })
-              : '';
+              const _importedTypesContent = fileConfig.importedTypesContent;
+              const importedTypesContent =
+                Object.keys(_importedTypesContent).length &&
+                Object.keys(importedTypesMap).length
+                  ? interpolateTemplates(
+                      _importedTypesContent,
+                      importedTypesMap
+                    )
+                  : {};
 
-          return interpolate(_content, {
-            importedTypesContent,
-            tableName: model.dbName ?? '',
-            modelName: model.name,
-          });
-        })
-        .join('\n');
+              return interpolate(template, {
+                ...importedTypesContent,
+                tableName: model.dbName ?? '',
+                modelName: model.name,
+              });
+            })
+            .join('\n')
+      );
 
       const _typeMapImports = fileConfig.typeMapImports;
       const typeMapImports = _typeMapImports
-        ? [...fieldTypeImports]
-            .map((fieldType) => interpolate(_typeMapImports, { fieldType }))
-            .join('')
-        : '';
+        ? mapValues<string, string, Templates>(_typeMapImports, (template) =>
+            [...fieldTypeImports]
+              .map((fieldType) => interpolate(template, { fieldType }))
+              .join('')
+          )
+        : {};
 
       const result =
         '// generated by drizzle-prisma-generator\n' +
         interpolate(_template, {
-          content,
-          typeMapImports,
+          ...content,
+          ...typeMapImports,
           imports: `import {\n  ${imports.join(
             ',\n  '
           )},\n} from '${schemaRelativePath}'`,

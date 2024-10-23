@@ -7,9 +7,9 @@ import {
   generateMySqlSchema,
   generatePgSchema,
   generateSQLiteSchema,
-  FileToGenerate,
 } from './util/generators';
 import { recursiveWrite } from './util/recursive-write';
+import { FileToGenerate } from './util/generators/utils';
 
 export const generator = generatorHandler({
   onManifest() {
