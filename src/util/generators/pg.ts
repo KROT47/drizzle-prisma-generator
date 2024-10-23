@@ -145,9 +145,6 @@ const prismaToDrizzleType = (
     case 'real':
       pgImports.add('real');
       return `real()`;
-    case 'smallint':
-      pgImports.add('smallint');
-      return `smallint()`;
     case 'varchar':
       pgImports.add('varchar');
       return `varchar(${defVal})`;
@@ -160,6 +157,14 @@ const prismaToDrizzleType = (
     case 'geometry':
       pgImports.add('geometry');
       return `geometry(${defVal})`;
+    case 'smallint':
+      if (defVal === 'autoincrement') {
+        pgImports.add('smallserial');
+        return `smallserial()`;
+      }
+
+      pgImports.add('smallint');
+      return `smallint()`;
     case 'bigint':
       if (defVal === 'autoincrement') {
         pgImports.add('bigserial');
