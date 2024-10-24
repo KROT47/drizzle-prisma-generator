@@ -238,7 +238,7 @@ const addColumnModifiers = (
   if (field.isId) column += `.primaryKey()`;
   if (field.isUnique) column += `.unique()`;
 
-  if (field.default) {
+  if (field.default !== undefined) {
     const defVal = field.default;
 
     switch (typeof defVal) {
