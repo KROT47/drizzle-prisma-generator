@@ -3,21 +3,15 @@ import { extractManyToManyModels } from '@/util/extract-many-to-many-models';
 import { UnReadonlyDeep } from '@/util/un-readonly-deep';
 import {
   Attribute,
-  AttributeArgument,
   BlockAttribute,
   Comment,
   createPrismaSchemaBuilder,
-  Field,
-  KeyValue,
-  RelationArray,
-  Value,
 } from '@mrleebo/prisma-ast';
 import {
   type DMMF,
   GeneratorError,
   type GeneratorOptions,
 } from '@prisma/generator-helper';
-import path from 'path';
 import {
   FileToGenerate,
   getAllTemplatesFromConfig,
@@ -397,6 +391,16 @@ export const generatePgSchema = (options: GeneratorOptions) => {
         `template${index}_importedTypesMap`,
         'importedTypesMap'
       ),
+      fieldsContent: getAllTemplatesFromConfig(
+        config,
+        `template${index}_fieldsContent`,
+        'fieldsContent'
+      ),
+      fieldsMap: getAllTemplatesFromConfig(
+        config,
+        `template${index}_fieldsMap`,
+        'fieldsMap'
+      ),
     };
   });
 
@@ -693,8 +697,32 @@ export const generatePgSchema = (options: GeneratorOptions) => {
                     )
                   : {};
 
+              const _fieldsMap = fileConfig.fieldsMap;
+              const fieldsMap = Object.keys(_fieldsMap).length
+                ? mapValuesFilterTruthy<string, string, Templates>(
+                    _fieldsMap,
+                    (template) =>
+                      model.fields
+                        .map((data) =>
+                          interpolate(
+                            template,
+                            data as unknown as Record<string, string>
+                          )
+                        )
+                        .join('')
+                  )
+                : {};
+
+              const _fieldsContent = fileConfig.fieldsContent;
+              const fieldsContent =
+                Object.keys(_fieldsContent).length &&
+                Object.keys(fieldsMap).length
+                  ? interpolateTemplates(_fieldsContent, fieldsMap)
+                  : {};
+
               return interpolate(template, {
                 ...importedTypesContent,
+                ...fieldsContent,
                 tableName: model.dbName ?? '',
                 modelName: model.name,
               });

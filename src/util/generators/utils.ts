@@ -31,13 +31,14 @@ const interpolateTransformers: Record<string, InterpolateTransformer> = {
     return camelize(key);
   },
   if(key, data, option) {
-    const match = option?.match(/if\(([^)]+)\)\?([^:]*):(.*)$/);
+    const match = option?.match(/if\(([^)]+)\)(\?([^:]*):(.*))?$/);
     if (!match) return key;
-    const [_, condStr, thenStr, elseStr] = match;
+    const [_, condStr, thenAndElse, thenStr, elseStr] = match;
+
     if (typeof condStr === 'string' && condStr in data && data[condStr]) {
-      return `${key}${thenStr}`;
+      return thenAndElse ? `${key}${thenStr}` : key;
     }
-    return `${key}${elseStr}`;
+    return thenAndElse ? `${key}${elseStr}` : '';
   },
 };
 export function interpolate(

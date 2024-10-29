@@ -25,13 +25,49 @@ generator drizzle {
   // mapping for each imported type (using @type(imports.<type>))
   template2_typeMapImports        = "\t{{fieldType}}DataSchema,\n"
   // file content template
-  template2_content               = "export const {{modelName|camelCase}}Schema = createSelectSchema({{modelName}}){{importedTypesContent}}\nexport const {{modelName|camelCase}}InsertSchema = createInsertSchema({{modelName}}){{importedTypesContent}}\n"
+  template2_content               = "export const {{modelName|camelCase}}Schema = createSelectSchema({{modelName}}){{importedTypesContent}}\nexport const {{modelName|camelCase}}InsertSchema = createInsertSchema({{modelName}}){{importedTypesContent}}\nconst {{modelName|camelCase}}PrimaryKey = {{fieldsContent1}}\nconst {{modelName|camelCase}}PrimaryKeyLower = {{fieldsContent2}}\n"
   // content for all imported types which receives importedTypesMap
   template2_importedTypesContent  = ".extend({\n{{importedTypesMap}}})"
   // mapping for each imported type (using @type(imports.<type>))
-  // receives all field data (name, type, isRequired, ...)
+  // receives all field data, look below at Field Type section
   template2_importedTypesMap      = "  {{name}}: {{type}}DataSchema{{|if(isRequired)?:.nullable()}},\n"
+  // content to insert fieldsMap into
+  template2_fieldsContent1 = "{{fieldsMap}}"
+  // any other variable may be created by adding number to the end
+  template2_fieldsContent2 = "{{fieldsMap}}.toLowerCase()"
+  // mapping for each field in model
+  // e.g. here prints field name if it is primary key
+  template2_fieldsMap     = "{{name|if(isId)}}"
 }
+```
+
+#### Field type (DMMF.Field)
+
+```ts
+type Field = ReadonlyDeep<{
+  kind: FieldKind;
+  name: string;
+  isRequired: boolean;
+  isList: boolean;
+  isUnique: boolean;
+  isId: boolean;
+  isReadOnly: boolean;
+  isGenerated?: boolean;
+  isUpdatedAt?: boolean;
+  /**
+   * Describes the data type in the same the way it is defined in the Prisma schema:
+   * BigInt, Boolean, Bytes, DateTime, Decimal, Float, Int, JSON, String, $ModelName
+   */
+  type: string;
+  dbName?: string | null;
+  hasDefaultValue: boolean;
+  default?: FieldDefault | FieldDefaultScalar | FieldDefaultScalar[];
+  relationFromFields?: string[];
+  relationToFields?: string[];
+  relationOnDelete?: string;
+  relationName?: string;
+  documentation?: string;
+}>;
 ```
 
 :warning: - if output doesn't end with `.ts`, it will be treated like a folder, and schema will be generated to `schema.ts` inside of it.  
