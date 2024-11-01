@@ -21,6 +21,25 @@ function camelize(str: string) {
     .replace(/\s+/g, '');
 }
 
+function isConditionTruthy(condition: string, data: Record<string, string>) {
+  return condition.split('|').reduce(
+    (acc, cond) =>
+      acc ||
+      cond.split('&').reduce((acc1, cond1) => {
+        const preCondition = cond1.trim();
+        if (!preCondition) return acc1;
+        let asd = preCondition;
+        let check = (v: unknown) => Boolean(v);
+        if (preCondition.startsWith('!')) {
+          asd = preCondition.slice(1);
+          check = (v) => !v;
+        }
+        return acc1 && check(data[asd]);
+      }, true),
+    false
+  );
+}
+
 type InterpolateTransformer = (
   key: string,
   data: Record<string, string>,
@@ -34,8 +53,7 @@ const interpolateTransformers: Record<string, InterpolateTransformer> = {
     const match = option?.match(/if\(([^)]+)\)(\?([^:]*):(.*))?$/);
     if (!match) return key;
     const [_, condStr, thenAndElse, thenStr, elseStr] = match;
-
-    if (typeof condStr === 'string' && condStr in data && data[condStr]) {
+    if (typeof condStr === 'string' && isConditionTruthy(condStr, data)) {
       return thenAndElse ? `${key}${thenStr}` : key;
     }
     return thenAndElse ? `${key}${elseStr}` : '';

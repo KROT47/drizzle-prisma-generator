@@ -212,13 +212,18 @@ const prismaToDrizzleType = (
 };
 
 const addColumnModifiers = (
-  field: DMMF.Field,
+  field: UnReadonlyDeep<DMMF.Field>,
   column: string,
   fields: readonly DMMF.Field[],
   attributes?: Attribute[]
 ) => {
   if (field.documentation) {
     const mods = getModsFromDocs(field.documentation);
+
+    if (mods.some((mod) => mod.toLowerCase().includes('generated'))) {
+      field.isGenerated = true;
+    }
+
     mods.forEach((mod) => {
       column += mod;
     });
@@ -265,6 +270,7 @@ const addColumnModifiers = (
         }
 
         if (value.name === 'dbgenerated') {
+          field.isGenerated = true;
           column += `.default(sql\`${s(value.args[0], '`')}\`)`;
 
           drizzleImports.add('sql');
@@ -310,7 +316,7 @@ const addColumnModifiers = (
 };
 
 const prismaToDrizzleColumn = (
-  field: DMMF.Field,
+  field: UnReadonlyDeep<DMMF.Field>,
   fields: readonly DMMF.Field[],
   attributes?: Attribute[]
 ): string | undefined => {
@@ -328,7 +334,7 @@ const prismaToDrizzleColumn = (
     );
     if (typeAndConfigFromDocs) {
       type = typeAndConfigFromDocs.type;
-      defVal = typeAndConfigFromDocs.config;
+      defVal = typeAndConfigFromDocs.config ?? '';
     } else if (attributes) {
       const typeAndConfig = getDbSpecialTypeAndConfigStr(attributes);
       if (typeAndConfig) {
@@ -337,7 +343,11 @@ const prismaToDrizzleColumn = (
       }
     }
 
-    if (!defVal && typeof defaultVal === 'object' && 'name' in defaultVal) {
+    if (
+      defVal === undefined &&
+      typeof defaultVal === 'object' &&
+      'name' in defaultVal
+    ) {
       defVal = defaultVal.name;
     }
 
@@ -409,16 +419,13 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const modelsIndexes =
     'indexes' in datamodel && (datamodel.indexes as unknown as Index[]);
 
-  const clonedModels = JSON.parse(JSON.stringify(models)) as UnReadonlyDeep<
-    DMMF.Model[]
-  >;
-
+  const clonedModels = JSON.parse(JSON.stringify(models)) as DMMF.Model[];
   const manyToManyModels = extractManyToManyModels(clonedModels);
 
   const modelsWithImplicit = [
     ...clonedModels,
     ...manyToManyModels,
-  ] as DMMF.Model[];
+  ] as UnReadonlyDeep<DMMF.Model>[];
 
   const pgEnums: string[] = [];
 
@@ -658,7 +665,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       const content: Templates = mapValues<string, string, Templates>(
         _content,
         (template) =>
-          models
+          modelsWithImplicit
             .map((model) => {
               imports.push(model.name);
               const localFieldTypesImports: Partial<DMMF.Field>[] = [];
