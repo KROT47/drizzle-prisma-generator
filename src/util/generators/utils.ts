@@ -229,6 +229,12 @@ export function getTSTypeModStrFromDocs({
   return '';
 }
 
+export function getCheckConstraintsFromDocs({ documentation }: DMMF.Field) {
+  if (!documentation) return;
+  const matches = [...documentation.matchAll(/@check\((.*)\)/g)];
+  if (matches.length) return matches.map((match) => match[1]!);
+}
+
 export function getFieldTypeAndConfigFromDocs(
   docs: DMMF.Field['documentation']
 ) {

@@ -92,8 +92,10 @@ model Warehouse {
   name        String @db.VarChar(50)
   /// @type(tsvector)
   /// @.generatedAlwaysAs(sql`prepare_search_field(name)`)
-  fts          String
-  deletedAt    DateTime? @db.Timestamptz(6)
+  fts         String
+  /// @check(sql`"age" >= 21`)
+  age         Int
+  deletedAt   DateTime? @db.Timestamptz(6)
 
   /// @.where(sql`"deletedAt" IS NULL`)
   @@unique([coordinates, name], name: "some_idx")
@@ -121,6 +123,7 @@ export const Warehouse = pgTable(
     deletedAt: timestamp({ mode: 'date', withTimezone: true, precision: 6 }),
   },
   (Warehouse) => ({
+    warehouses_age_check1: check('warehouses_age_check_1', sql`"age" >= 21`),
     some_idx: uniqueIndex('some_idx')
       .on(Warehouse.coordinates, Warehouse.name)
       .where(sql`"deletedAt" IS NULL`),

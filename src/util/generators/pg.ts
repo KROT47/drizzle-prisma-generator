@@ -15,6 +15,7 @@ import {
 import {
   FileToGenerate,
   getAllTemplatesFromConfig,
+  getCheckConstraintsFromDocs,
   getDeleteAction,
   getFieldForeignKeyField,
   getFieldTypeAndConfigFromDocs,
@@ -537,9 +538,9 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
         const mods = comments.map(({ text }) => getModsFromDocs(text)).flat();
 
-        return `\t'${
+        return `\t${
           name ? idxName : `${idxName.slice(0, idxName.length - 4)}_unique_idx`
-        }': uniqueIndex('${idxName}')\n\t\t.on(${fields
+        }: uniqueIndex('${idxName}')\n\t\t.on(${fields
           .map((f) => `${schemaTable.name}.${f}`)
           .join(', ')})${mods ? mods.join('') : ''}`;
       });
@@ -547,13 +548,28 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       indexes.push(...uniques);
     }
 
+    schemaTable.fields.map((field) => {
+      const checkConstraints = getCheckConstraintsFromDocs(field);
+      if (!checkConstraints || !checkConstraints.length) return;
+      pgImports.add('check');
+      let uniqueKey = 1;
+      checkConstraints.forEach((constraint) => {
+        const constraintName = `${schemaTable.dbName}_${
+          field.name
+        }_check_${uniqueKey++}`.toLowerCase();
+        indexes.push(
+          `\t${constraintName}: check('${constraintName}', ${constraint})`
+        );
+      });
+    });
+
     if (schemaTable.primaryKey) {
       pgImports.add('primaryKey');
 
       const pk = schemaTable.primaryKey!;
       const pkName = s(pk.name ?? `${schemaTable.name}_cpk`);
 
-      const pkField = `\t'${pkName}': primaryKey({\n\t\tname: '${pkName}',\n\t\tcolumns: [${pk.fields
+      const pkField = `\t${pkName}: primaryKey({\n\t\tname: '${pkName}',\n\t\tcolumns: [${pk.fields
         .map((f) => `${schemaTable.name}.${f}`)
         .join(', ')}]\n\t})`;
 
