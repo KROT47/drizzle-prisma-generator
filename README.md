@@ -13,6 +13,12 @@ generator drizzle {
   output   = "./src/schema.ts"
   imports  = "./drizzleSchemaUtils.ts"
 
+  // add postfix to each table model's name (optional, default: "Table")
+  modelPostfix = "SomePostfix"
+
+  // tells if relations should be exported from drizzle schema (optional, default: false)
+  exportRelations = true
+
   // convert to Kysely types
   file1             = "./kyselyDatabase.ts"
   template1         = "import { Kyselify } from 'drizzle-orm/kysely'\n\n{{imports}}\n\nexport interface Database {\n{{content}}\n}"
@@ -108,7 +114,7 @@ converts to:
 ```ts
 import * as imports from './drizzleSchemaUtils';
 
-export const Warehouse = pgTable(
+export const WarehouseSomePostfix = pgTable(
   'warehouses',
   {
     coordinates: geometry({ type: 'point', srid: 4326 })

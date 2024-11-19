@@ -216,6 +216,7 @@ const addColumnModifiers = (
   field: UnReadonlyDeep<DMMF.Field>,
   column: string,
   fields: readonly DMMF.Field[],
+  modelPostfix: string,
   attributes?: Attribute[]
 ) => {
   if (field.documentation) {
@@ -309,7 +310,8 @@ const addColumnModifiers = (
     const { type, relationToFields } = fkField;
     if (relationToFields) {
       const deleteAction = getDeleteAction(fkField);
-      column += `.references((): AnyPgColumn => ${type}.${relationToFields[0]}, {onDelete: '${deleteAction}'})`;
+      const modelName = `${type}${modelPostfix}`;
+      column += `.references((): AnyPgColumn => ${modelName}.${relationToFields[0]}, {onDelete: '${deleteAction}'})`;
     }
   }
 
@@ -319,6 +321,7 @@ const addColumnModifiers = (
 const prismaToDrizzleColumn = (
   field: UnReadonlyDeep<DMMF.Field>,
   fields: readonly DMMF.Field[],
+  modelPostfix: string,
   attributes?: Attribute[]
 ): string | undefined => {
   const colDbName = s(field.dbName ?? field.name);
@@ -358,7 +361,7 @@ const prismaToDrizzleColumn = (
     column += drizzleType;
   }
 
-  column = addColumnModifiers(field, column, fields, attributes);
+  column = addColumnModifiers(field, column, fields, modelPostfix, attributes);
 
   return column;
 };
@@ -369,6 +372,13 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     'imports' in options.generator.config
       ? getMaybeArrayFirstValue(options.generator.config['imports'])
       : undefined;
+  const modelPostfix =
+    getMaybeArrayFirstValue(options.generator.config['modelPostfix']) ??
+    'Table';
+  const exportRelations =
+    getMaybeArrayFirstValue(options.generator.config['exportRelations']) ===
+    'true';
+
   if (importsPath) {
     typeImportsPath = getRelativePathWithoutExtension(schemaPath, importsPath);
   }
@@ -451,6 +461,8 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const prismaSchemaAstBuilder = createPrismaSchemaBuilder(options.datamodel);
 
   for (const schemaTable of modelsWithImplicit) {
+    const drizzleModelName = `${schemaTable.name}${modelPostfix}`;
+
     const modelAst = prismaSchemaAstBuilder.findByType('model', {
       name: schemaTable.name,
     });
@@ -477,6 +489,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
             prismaToDrizzleColumn(
               field,
               schemaTable.fields,
+              modelPostfix,
               fieldAst.attributes
             ),
           ];
@@ -576,11 +589,9 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       indexes.push(pkField);
     }
 
-    const table = `export const ${
-      schemaTable.name
-    } = pgTable('${tableDbName}', {\n${Object.values(columnFields).join(
-      ',\n'
-    )}\n}${
+    const table = `export const ${drizzleModelName} = pgTable('${tableDbName}', {\n${Object.values(
+      columnFields
+    ).join(',\n')}\n}${
       indexes.length
         ? `, (${schemaTable.name}) => ({\n${indexes.join(',\n')}\n})`
         : ''
@@ -603,23 +614,25 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
         const relName = s(field.relationName ?? '');
 
+        const modelName = `${field.type}${modelPostfix}`;
+
         return `\t${field.name}: ${
           field.relationFromFields?.length
-            ? `one(${
-                field.type
-              }, {\n\t\trelationName: '${relName}',\n\t\tfields: [${field.relationFromFields
-                .map((e) => `${schemaTable.name}.${e}`)
+            ? `one(${modelName}, {\n\t\trelationName: '${relName}',\n\t\tfields: [${field.relationFromFields
+                .map((e) => `${drizzleModelName}.${e}`)
                 .join(', ')}],\n\t\treferences: [${field
-                .relationToFields!.map((e) => `${field.type}.${e}`)
+                .relationToFields!.map((e) => `${modelName}.${e}`)
                 .join(', ')}]\n\t})`
-            : `many(${field.type}, {\n\t\trelationName: '${relName}'\n\t})`
+            : `many(${modelName}, {\n\t\trelationName: '${relName}'\n\t})`
         }`;
       })
       .join(',\n');
 
     const argString = Array.from(relationArgs.values()).join(', ');
 
-    const rqbRelation = `export const ${schemaTable.name}Relations = relations(${schemaTable.name}, ({ ${argString} }) => ({\n${rqbFields}\n}));`;
+    const rqbRelation = `${
+      exportRelations ? `export const ${drizzleModelName}Relations = ` : ''
+    }relations(${drizzleModelName}, ({ ${argString} }) => ({\n${rqbFields}\n}));`;
 
     rqb.push(rqbRelation);
   }
