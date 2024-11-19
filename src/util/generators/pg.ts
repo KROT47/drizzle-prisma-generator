@@ -688,7 +688,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
         schemaPath
       );
 
-      const imports: string[] = [];
+      const imports = new Set<string>();
       const fieldTypeImports = new Set<string>();
 
       const content: Templates = mapValues<string, string, Templates>(
@@ -696,7 +696,10 @@ export const generatePgSchema = (options: GeneratorOptions) => {
         (template) =>
           modelsWithImplicit
             .map((model) => {
-              imports.push(model.name);
+              const baseModelName = model.name;
+              const modelName = `${baseModelName}${modelPostfix}`;
+              imports.add(modelName);
+
               const localFieldTypesImports: Partial<DMMF.Field>[] = [];
 
               model.fields.forEach((field) => {
@@ -760,7 +763,8 @@ export const generatePgSchema = (options: GeneratorOptions) => {
                 ...importedTypesContent,
                 ...fieldsContent,
                 tableName: model.dbName ?? '',
-                modelName: model.name,
+                baseModelName,
+                modelName,
               });
             })
             .join('\n')
@@ -780,7 +784,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
         interpolate(_template, {
           ...content,
           ...typeMapImports,
-          imports: `import {\n  ${imports.join(
+          imports: `import {\n  ${[...imports].join(
             ',\n  '
           )},\n} from '${schemaRelativePath}'`,
         });
