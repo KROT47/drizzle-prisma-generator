@@ -16,6 +16,9 @@ generator drizzle {
   // add postfix to each table model's name (optional, default: "Table")
   modelPostfix = "SomePostfix"
 
+  // add postfix to each enum (optional, default: "Enum")
+  enumPostfix = "EnumPostfix"
+
   // tells if relations should be exported from drizzle schema (optional, default: false)
   exportRelations = true
 

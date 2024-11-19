@@ -318,17 +318,24 @@ const addColumnModifiers = (
   return column;
 };
 
-const prismaToDrizzleColumn = (
-  field: UnReadonlyDeep<DMMF.Field>,
-  fields: readonly DMMF.Field[],
-  modelPostfix: string,
-  attributes?: Attribute[]
-): string | undefined => {
+const prismaToDrizzleColumn = ({
+  field,
+  fields,
+  enumPostfix,
+  modelPostfix,
+  attributes,
+}: {
+  field: UnReadonlyDeep<DMMF.Field>;
+  fields: readonly DMMF.Field[];
+  enumPostfix: string;
+  modelPostfix: string;
+  attributes?: Attribute[];
+}): string | undefined => {
   const colDbName = s(field.dbName ?? field.name);
   let column = `\t${field.name}: `;
 
   if (field.kind === 'enum') {
-    column += `${field.type}('${colDbName}')`;
+    column += `${field.type}${enumPostfix}('${colDbName}')`;
   } else {
     let defVal;
     let type = field.type;
@@ -375,6 +382,8 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const modelPostfix =
     getMaybeArrayFirstValue(options.generator.config['modelPostfix']) ??
     'Table';
+  const enumPostfix =
+    getMaybeArrayFirstValue(options.generator.config['enumPostfix']) ?? 'Enum';
   const exportRelations =
     getMaybeArrayFirstValue(options.generator.config['exportRelations']) ===
     'true';
@@ -449,7 +458,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     pgEnums.push(
       `export const ${
         schemaEnum.name
-      } = pgEnum('${enumDbName}', [${schemaEnum.values
+      }${enumPostfix} = pgEnum('${enumDbName}', [${schemaEnum.values
         .map((e) => `'${e.dbName ?? e.name}'`)
         .join(', ')}])`
     );
@@ -486,12 +495,13 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
           return [
             field.name,
-            prismaToDrizzleColumn(
+            prismaToDrizzleColumn({
               field,
-              schemaTable.fields,
+              fields: schemaTable.fields,
               modelPostfix,
-              fieldAst.attributes
-            ),
+              enumPostfix,
+              attributes: fieldAst.attributes,
+            }),
           ];
         })
         .filter((e) => e[1] !== undefined)
