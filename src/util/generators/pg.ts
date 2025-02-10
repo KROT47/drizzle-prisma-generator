@@ -493,6 +493,17 @@ export const generatePgSchema = (options: GeneratorOptions) => {
             throw new Error(`Model ${modelAst.name} not found in schema`);
           }
 
+          // fix duplicate unique indexes creation
+          // if unique index is defined on table for one field we prevent to add `.unique()` modifier to field
+          // and instead add unique index to table
+          if (
+            schemaTable.uniqueIndexes.find(
+              ({ fields }) => fields.length === 1 && fields.includes(field.name)
+            )
+          ) {
+            field.isUnique = false;
+          }
+
           return [
             field.name,
             prismaToDrizzleColumn({
@@ -540,6 +551,9 @@ export const generatePgSchema = (options: GeneratorOptions) => {
           return;
         }
         if (prop.type === 'attribute' && prop.name === 'unique') {
+          // eslint-disable-next-line
+          // console.log('###543', inspect(prop, { depth: 10 }));
+
           uniqueIndexes.push({
             ...prop,
             comments: prevComments ?? [],
