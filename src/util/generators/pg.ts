@@ -665,14 +665,16 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     a.localeCompare(b)
   );
   const drizzleImportsStr = drizzleImportsArr.length
-    ? `import { ${drizzleImportsArr.join(', ')} } from 'drizzle-orm'`
+    ? `import { ${drizzleImportsArr.join(', ')} } from '@metamorph/drizzle-orm'`
     : undefined;
 
   const pgImportsArr = Array.from(pgImports.values()).sort((a, b) =>
     a.localeCompare(b)
   );
   const pgImportsStr = pgImportsArr.length
-    ? `import { ${pgImportsArr.join(', ')} } from 'drizzle-orm/pg-core'`
+    ? `import { ${pgImportsArr.join(
+        ', '
+      )} } from '@metamorph/drizzle-orm/pg-core'`
     : undefined;
 
   let importsStr: string | undefined = [drizzleImportsStr, pgImportsStr]
