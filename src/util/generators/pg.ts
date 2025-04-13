@@ -44,6 +44,18 @@ function registerTsvectorFn() {
   );
 }
 
+function registerHstoreFn() {
+  pgImports.add('customType');
+  constants.set(
+    'hstore',
+    `const hstore = customType<{ data: string }>({
+  dataType() {
+    return "hstore";
+  },
+});`
+  );
+}
+
 let typeImportsPath: string | undefined;
 const pgImports = new Set<string>();
 const drizzleImports = new Set<string>();
@@ -146,6 +158,9 @@ const prismaToDrizzleType = (
     case 'uuid':
       pgImports.add('uuid');
       return `uuid()`;
+    case 'hstore':
+      registerHstoreFn();
+      return `hstore(${defVal})`;
     case 'tsvector':
       registerTsvectorFn();
       return `tsvector(${defVal})`;
