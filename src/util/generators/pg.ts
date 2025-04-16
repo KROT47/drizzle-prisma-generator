@@ -44,6 +44,16 @@ function registerTsvectorFn() {
   );
 }
 
+function registerPgSchema(tableSchema: string) {
+  const schemaConstantName = `${tableSchema}Schema`;
+  pgImports.add('pgSchema');
+  constants.set(
+    schemaConstantName,
+    `const ${schemaConstantName} = pgSchema('${tableSchema}');`
+  );
+  return schemaConstantName;
+}
+
 function registerHstoreFn() {
   pgImports.add('customType');
   constants.set(
@@ -454,13 +464,15 @@ export const generatePgSchema = (options: GeneratorOptions) => {
   const modelsIndexes =
     'indexes' in datamodel && (datamodel.indexes as unknown as Index[]);
 
-  const clonedModels = JSON.parse(JSON.stringify(models)) as DMMF.Model[];
+  const clonedModels = structuredClone(models) as DMMF.Model[];
   const manyToManyModels = extractManyToManyModels(clonedModels);
 
-  const modelsWithImplicit = [
-    ...clonedModels,
-    ...manyToManyModels,
-  ] as UnReadonlyDeep<DMMF.Model>[];
+  const modelsWithImplicit = (
+    [...clonedModels, ...manyToManyModels] as UnReadonlyDeep<DMMF.Model>[]
+  ).map((model) => ({
+    ...model,
+    schema: undefined as string | undefined,
+  }));
 
   const pgEnums: string[] = [];
 
@@ -493,6 +505,21 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     if (!modelAst) {
       throw new Error(`Model ${schemaTable.name} not found in schema`);
     }
+
+    const tableSchemaAst = prismaSchemaAstBuilder.findByType('attribute', {
+      name: 'schema',
+      within: modelAst.properties,
+    });
+    const tableSchema = (() => {
+      const schema =
+        tableSchemaAst?.kind === 'object' &&
+        tableSchemaAst.args[0]?.value.toString().replace(/"/g, '');
+      return schema === 'public' ? undefined : (schema as string);
+    })();
+    const schemaConstantName = tableSchema
+      ? registerPgSchema(tableSchema)
+      : undefined;
+    schemaTable.schema = tableSchema;
 
     const tableDbName = s(schemaTable.dbName ?? schemaTable.name);
 
@@ -628,7 +655,11 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       indexes.push(pkField);
     }
 
-    const table = `export const ${drizzleModelName} = pgTable('${tableDbName}', {\n${Object.values(
+    const tableConstructorName = schemaConstantName
+      ? `${schemaConstantName}.table`
+      : 'pgTable';
+
+    const table = `export const ${drizzleModelName} = ${tableConstructorName}('${tableDbName}', {\n${Object.values(
       columnFields
     ).join(',\n')}\n}${
       indexes.length
@@ -803,6 +834,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
               return interpolate(template, {
                 ...importedTypesContent,
                 ...fieldsContent,
+                tableSchema: model.schema ?? '',
                 tableName: model.dbName ?? '',
                 baseModelName,
                 modelName,

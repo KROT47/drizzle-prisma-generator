@@ -25,7 +25,7 @@ generator drizzle {
   // convert to Kysely types
   file1             = "./kyselyDatabase.ts"
   template1         = "import { Kyselify } from 'drizzle-orm/kysely'\n\n{{imports}}\n\nexport interface Database {\n{{content}}\n}"
-  template1_content = "\t{{tableName}}: Kyselify<typeof {{modelName}}>"
+  template1_content = "\t'{{tableSchema|if(tableSchema)?.:}}{{tableName}}': Kyselify<typeof {{modelName}}>"
 
   // convert to Zod types
   file2                           = "./drizzleZodSchemas.ts"
