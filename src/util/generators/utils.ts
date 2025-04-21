@@ -40,6 +40,9 @@ function isConditionTruthy(condition: string, data: Record<string, string>) {
   );
 }
 
+const skipRestToken = '!!skipRestToken!!';
+const skipRestRegExp = new RegExp(`${skipRestToken}.*$`, 'm');
+
 type InterpolateTransformer = (
   key: string,
   data: Record<string, string>,
@@ -57,6 +60,15 @@ const interpolateTransformers: Record<string, InterpolateTransformer> = {
       return thenAndElse ? `${key}${thenStr}` : key;
     }
     return thenAndElse ? `${key}${elseStr}` : '';
+  },
+  skipRestIf(key, data, option) {
+    const match = option?.match(/skipRestIf\(([^)]+)\)$/);
+    if (!match) return key;
+    const [_, condStr] = match;
+    if (typeof condStr === 'string' && isConditionTruthy(condStr, data)) {
+      return skipRestToken;
+    }
+    return '';
   },
 };
 export function interpolate(
@@ -197,7 +209,10 @@ export function interpolateTemplates(
   if (!templates) return {};
   const result: Templates = {};
   Object.keys(templates).forEach((key) => {
-    result[key] = interpolate(templates[key]!, data);
+    result[key] = interpolate(templates[key]!, data).replace(
+      skipRestRegExp,
+      ''
+    );
   });
   return result;
 }
