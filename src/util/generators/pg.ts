@@ -564,7 +564,7 @@ export const generatePgSchema = (options: GeneratorOptions) => {
       .filter(
         ({ model, type }) => model === schemaTable.name && type === 'normal'
       )
-      .map(({ dbName, algorithm, fields }) => {
+      .map(({ dbName, algorithm = 'BTree', fields }) => {
         pgImports.add('index');
         const indexName =
           dbName ??
