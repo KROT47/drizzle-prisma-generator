@@ -474,18 +474,43 @@ export const generatePgSchema = (options: GeneratorOptions) => {
     schema: undefined as string | undefined,
   }));
 
+  const prismaSchemaAstBuilder = createPrismaSchemaBuilder(options.datamodel);
+
   const pgEnums: string[] = [];
 
   for (const schemaEnum of enums) {
     if (!schemaEnum.values.length) continue;
     const enumDbName = s(schemaEnum.dbName ?? schemaEnum.name);
 
-    pgImports.add('pgEnum');
+    const enumAst = prismaSchemaAstBuilder.findByType('enum', {
+      name: schemaEnum.name,
+    });
+    if (!enumAst) {
+      throw new Error(`Enum ${schemaEnum.name} not found in schema`);
+    }
+
+    const enumSchemaAst = prismaSchemaAstBuilder.findByType('attribute', {
+      name: 'schema',
+      within: enumAst.enumerators,
+    });
+
+    const enumSchema = (
+      (enumSchemaAst?.args?.find(({ type }) => type === 'attributeArgument')
+        ?.value ?? 'public') as string
+    ).replace(/[^a-zA-Z0-9]/g, '');
+
+    let enumMethod = 'pgEnum';
+
+    if (enumSchema !== 'public') {
+      enumMethod = `${enumSchema}Schema.enum`;
+    } else {
+      pgImports.add('pgEnum');
+    }
 
     pgEnums.push(
       `export const ${
         schemaEnum.name
-      }${enumPostfix} = pgEnum('${enumDbName}', [${schemaEnum.values
+      }${enumPostfix} = ${enumMethod}('${enumDbName}', [${schemaEnum.values
         .map((e) => `'${e.dbName ?? e.name}'`)
         .join(', ')}])`
     );
@@ -493,8 +518,6 @@ export const generatePgSchema = (options: GeneratorOptions) => {
 
   const tables: string[] = [];
   const rqb: string[] = [];
-
-  const prismaSchemaAstBuilder = createPrismaSchemaBuilder(options.datamodel);
 
   for (const schemaTable of modelsWithImplicit) {
     const drizzleModelName = `${schemaTable.name}${modelPostfix}`;
